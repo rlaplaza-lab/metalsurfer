@@ -7,7 +7,7 @@ import time
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
@@ -43,7 +43,9 @@ from ..optimization import (
 )
 from ..placement._material import calculator_pbc_for_atoms, material_aware_pbc
 from ..placement.generators import (
+    _spec_grid_info,
     enumerate_placement_specs,
+    estimate_placement_spec_capacity,
     generate_placement_from_spec_with_reason,
     generate_placements_from_specs,
 )
@@ -321,6 +323,27 @@ def _compute_slab_energy(
     return float(slab_copy.get_potential_energy())
 
 
+def _combine_slab_adsorbate(
+    slab_atoms: Atoms,
+    adsorbate: Atoms,
+    calculator=None,
+) -> Atoms:
+    """Append *adsorbate* to a copy of *slab_atoms* at the calculator boundary."""
+    combined = slab_atoms + adsorbate
+    combined.set_pbc(calculator_pbc_for_atoms(combined))
+    if calculator is not None:
+        combined.calc = calculator
+    return combined
+
+
+def _copy_with_material_pbc(atoms: Atoms, material_type: str) -> Atoms:
+    """Copy *atoms* and apply the material PBC expected for stored results."""
+    result_atoms = atoms.copy()
+    result_atoms.calc = atoms.calc
+    apply_material_pbc(result_atoms, material_type)
+    return result_atoms
+
+
 def _materialize_spec_placements(
     *,
     specs: list,
@@ -368,9 +391,7 @@ def _materialize_spec_placements(
             )
             continue
         adsorbate, descriptor = result
-        combined = slab_atoms + adsorbate
-        combined.set_pbc(calculator_pbc_for_atoms(combined))
-        combined.calc = calculator
+        combined = _combine_slab_adsorbate(slab_atoms, adsorbate, calculator)
         all_combined.append(combined)
         placement_ids.append(descriptor.placement_index)
         placement_descriptors.append(descriptor)
@@ -529,9 +550,7 @@ def _evaluate_optimized_candidate(
     slab_size = len(slab_atoms)
     assert min_d is not None
     dist = float(min_d)
-    result_atoms = opt_atoms.copy()
-    result_atoms.calc = opt_atoms.calc
-    apply_material_pbc(result_atoms, material_type)
+    result_atoms = _copy_with_material_pbc(opt_atoms, material_type)
     result = ScreeningResult(
         molecule=molecule_name,
         placement_id=placement_id,
@@ -683,6 +702,101 @@ def _finalize_screen_results(
     return filtered, t_filtering, filter_failure, duplicates
 
 
+class _BOPoolView(Protocol):
+    """Attributes both BO callers read off a prepared candidate pool."""
+
+    all_specs: list[Any]
+    candidate_features: pd.DataFrame
+    valid_spec_indices: list[int]
+    scaled_candidate_features: np.ndarray
+    materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]]
+    pid_to_pool_position: dict[int, int]
+    sigma_scale: np.ndarray
+
+
+@dataclass(frozen=True)
+class BOPoolStage:
+    """Prepared BO candidate pool plus enumeration diagnostics."""
+
+    pool: _BOPoolView | None
+    max_enumerated_specs: int
+    n_candidate_specs: int
+    grid_info: Any | None
+    capacity_exhausted: bool
+
+
+def _prepare_bo_pool_stage(
+    *,
+    conformers: list[Atoms],
+    slab: Substrate,
+    slab_for_sites: Atoms,
+    config: AdsorptionConfig,
+    smiles: str,
+    molecule_name: str,
+    surface_type: str,
+    site_context: SiteContext | None,
+    conformer_energies: list[float] | None,
+    pool_prep_fn,
+) -> BOPoolStage:
+    """Resolve the BO grid, capacity, pool size, and candidate pool in one place."""
+    grid_info = (
+        _spec_grid_info(
+            conformers,
+            slab_for_sites,
+            config,
+            smiles,
+            site_context,
+            full_slab=slab.atoms,
+            material_type=slab.material_type,
+        )
+        if conformers
+        else None
+    )
+    max_enumerated_specs = estimate_placement_spec_capacity(
+        conformers,
+        slab_for_sites,
+        config,
+        smiles,
+        site_context=site_context,
+        full_slab=slab.atoms,
+        grid_info=grid_info,
+        material_type=slab.material_type,
+    )
+    pool_size = (
+        config.bo.candidate_pool_size
+        if config.bo.candidate_pool_size is not None
+        else max_enumerated_specs
+    )
+    if pool_size <= 0:
+        return BOPoolStage(
+            pool=None,
+            max_enumerated_specs=max_enumerated_specs,
+            n_candidate_specs=0,
+            grid_info=grid_info,
+            capacity_exhausted=True,
+        )
+    pool, n_candidate_specs = pool_prep_fn(
+        conformers=conformers,
+        slab=slab,
+        slab_for_sites=slab_for_sites,
+        config=config,
+        smiles=smiles,
+        molecule_name=molecule_name,
+        surface_type=surface_type,
+        pool_size=pool_size,
+        site_context=site_context,
+        conformer_energies=conformer_energies,
+        grid_info=grid_info,
+    )
+    return BOPoolStage(
+        pool=pool,
+        max_enumerated_specs=max_enumerated_specs,
+        n_candidate_specs=n_candidate_specs,
+        grid_info=grid_info,
+        capacity_exhausted=False,
+    )
+
+
 @dataclass
 class SubstrateRefState:
     """Resolved substrate references for placement and freeze policy."""
@@ -794,9 +908,7 @@ def build_representative_relaxation_atoms(
         )
         if result is not None:
             adsorbate, _ = result
-            combined = slab_atoms + adsorbate
-            combined.set_pbc(calculator_pbc_for_atoms(combined))
-            return combined
+            return _combine_slab_adsorbate(slab_atoms, adsorbate)
 
     largest = max(conformers, key=len)
     positions = largest.get_positions().copy()
@@ -812,9 +924,7 @@ def build_representative_relaxation_atoms(
     positions[:, 2] += z_offset
     ads = largest.copy()
     ads.set_positions(positions)
-    combined = slab_atoms + ads
-    combined.set_pbc(calculator_pbc_for_atoms(combined))
-    return combined
+    return _combine_slab_adsorbate(slab_atoms, ads)
 
 
 def needs_workload_autotune(config: AdsorptionConfig, *, bo: bool) -> bool:
@@ -1021,7 +1131,7 @@ def _bootstrap_screening_run(
     config: AdsorptionConfig,
 ) -> ScreeningRunBootstrap:
     """Validate substrate, load MLIP, and compute reference energies."""
-    # Inline import: workflow.reference imports ``_prepare_atoms_for_calculator``
+    # Inline import: workflow.reference imports ``_compute_slab_energy``
     # from this module (circular).
     from .reference import calculate_reference_energies
 

@@ -17,12 +17,7 @@ from ..orientation import (
     orient_from_spec,
 )
 from ..site_context import SiteContext, site_context_for_sampling
-from ..site_coords import (
-    _derive_top_layer_tolerance,
-    _slab_outward_normal,
-    top_layer_mask_by_normal,
-)
-from ..site_enumeration import _get_site_surface_radii
+from ..site_coords import _slab_outward_normal
 from .context import _HeightInterval, _PlacementContext, _PoseBatchCache
 from .height import (
     _com_floor_on_support_plane,
@@ -40,27 +35,14 @@ logger = logging.getLogger(__name__)
 def build_pose_batch_cache(
     slab: Atoms,
     conformers: list[Atoms],
-    config: AdsorptionConfig,
 ) -> _PoseBatchCache:
-    """Precompute the slab frame, top-layer radius, and per-conformer frames."""
-    _ = config
+    """Precompute the slab frame and per-conformer frames."""
     cache = _PoseBatchCache()
     cell = np.asarray(slab.get_cell(), dtype=float)
     positions = np.asarray(slab.get_positions(), dtype=float)
-    symbols = list(slab.get_chemical_symbols())
     cache.cell = cell
     cache.n_hat = _slab_outward_normal(positions, cell)
     cache.positions = positions
-    # Element-derived top depth (same as _get_site_surface_radii without
-    # top_indices), not config.top_layer_tolerance.
-    radii_indices = np.nonzero(
-        top_layer_mask_by_normal(
-            positions, cell, float(_derive_top_layer_tolerance(symbols))
-        )
-    )[0]
-    cache.r_surface_top_layer = _get_site_surface_radii(
-        slab, None, top_indices=radii_indices
-    )
     for i, conf in enumerate(conformers):
         ads_pos = conf.get_positions()
         symbols = conf.get_chemical_symbols()
@@ -92,7 +74,6 @@ def _resolve_placement_frame(
     *,
     site,
     reference: Atoms,
-    config: AdsorptionConfig,
     material_type: str,
     pose_cache: _PoseBatchCache | None,
 ) -> tuple[str, float, bool, np.ndarray]:
@@ -179,7 +160,6 @@ def _pose_from_spec(
         material_type=material_type,
         site=site,
         reference=ref_slab,
-        config=config,
         pose_cache=pose_cache,
     )
 
@@ -360,7 +340,6 @@ def _context_from_pose(
         material_type=material_type,
         site=site,
         reference=reference,
-        config=config,
         pose_cache=pose_cache,
     )
 

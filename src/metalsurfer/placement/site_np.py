@@ -8,11 +8,13 @@ outward ray (a dent or a missing atom) join that mesh.
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
+from collections.abc import Callable
 from typing import NamedTuple
 
 import numpy as np
-from scipy.spatial import ConvexHull, KDTree, QhullError
+from scipy.spatial import ConvexHull, Delaunay, KDTree, QhullError
 
 from ._constants import (
     _NP_HULL_SURFACE_EPS,
@@ -25,6 +27,8 @@ from ._constants import (
 from .geometry import framework_radii_from_symbols
 from .site_coords import _deduplicate_points, ray_exposure_mask
 
+logger = logging.getLogger(__name__)
+
 
 class _NPTopologyResult(NamedTuple):
     """Output of :func:`_generate_nanoparticle_topology_sites`."""
@@ -35,15 +39,41 @@ class _NPTopologyResult(NamedTuple):
     atom_indices: list[tuple[int, ...]]
 
 
-def _try_convex_hull(positions: np.ndarray) -> ConvexHull | None:
-    """Return a ConvexHull, or ``None`` if Qhull cannot build one."""
-    pts = np.asarray(positions, dtype=float)
-    if len(pts) < 4:
+def _try_qhull[T](
+    points: np.ndarray,
+    builder: Callable[[np.ndarray], T],
+    *,
+    min_points: int,
+) -> T | None:
+    """Return ``builder(points)``, or ``None`` when Qhull cannot build it."""
+    pts = np.asarray(points, dtype=float)
+    if len(pts) < min_points:
         return None
     try:
-        return ConvexHull(pts)
-    except (QhullError, ValueError, RuntimeError):
+        return builder(pts)
+    except (QhullError, ValueError, RuntimeError) as exc:
+        logger.debug("%s failed (%s)", builder.__name__, exc)
         return None
+
+
+def _try_convex_hull(positions: np.ndarray) -> ConvexHull | None:
+    """Return a ConvexHull, or ``None`` if Qhull cannot build one."""
+    return _try_qhull(positions, ConvexHull, min_points=4)
+
+
+def try_delaunay(
+    points: np.ndarray,
+    *,
+    delaunay_cls: type[Delaunay] = Delaunay,
+) -> Delaunay | None:
+    """Return a Delaunay triangulation, or ``None`` if Qhull cannot build one.
+
+    Fewer than three points are rejected up front; three non-collinear 2-D
+    points form a valid single-simplex triangulation. *delaunay_cls* lets
+    callers use a module-level binding (e.g. one patched in tests) without
+    changing the failure semantics.
+    """
+    return _try_qhull(points, delaunay_cls, min_points=3)
 
 
 def _hull_signed_distances(points: np.ndarray, hull: ConvexHull) -> np.ndarray:

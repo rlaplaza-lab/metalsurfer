@@ -226,7 +226,7 @@ def test_valid_custom_config():
 )
 def test_bool_config_default_and_override(field, default, override):
     assert getattr(AdsorptionConfig(), field) is default
-    assert getattr(AdsorptionConfig(**{**{field: override}}), field) is override
+    assert getattr(AdsorptionConfig(**{field: override}), field) is override
 
 
 def test_site_classification_method_auto_default_and_invalid():
@@ -440,7 +440,7 @@ def test_autobatcher_invalid_rejected(kwargs, error_match):
 )
 def test_zero_positive_int_rejected(field):
     with pytest.raises(ValueError, match=f"{field}.*positive integer"):
-        AdsorptionConfig(**{**{field: 0}})
+        AdsorptionConfig(**{field: 0})
 
 
 @pytest.mark.parametrize(
@@ -456,7 +456,7 @@ def test_zero_positive_int_rejected(field):
 )
 def test_negative_int_rejected(field):
     with pytest.raises(ValueError, match=f"{field}.*positive integer"):
-        AdsorptionConfig(**{**{field: -1}})
+        AdsorptionConfig(**{field: -1})
 
 
 # ---------------------------------------------------------------------------
@@ -488,7 +488,7 @@ def test_negative_int_rejected(field):
 )
 def test_zero_positive_float_rejected(field):
     with pytest.raises(ValueError, match=f"{field}.*positive"):
-        AdsorptionConfig(**{**{field: 0.0}})
+        AdsorptionConfig(**{field: 0.0})
 
 
 @pytest.mark.parametrize(
@@ -510,7 +510,7 @@ def test_zero_positive_float_rejected(field):
 )
 def test_negative_float_rejected(field):
     with pytest.raises(ValueError, match=f"{field}.*positive"):
-        AdsorptionConfig(**{**{field: -0.1}})
+        AdsorptionConfig(**{field: -0.1})
 
 
 def test_saturation_activities_coerce_list_and_reject_invalid():
@@ -574,10 +574,10 @@ def test_zero_energy_dedup_accepted():
 
 @pytest.mark.parametrize("field", ["energy_dedup_threshold", "rmsd_dedup_threshold"])
 def test_dedup_threshold_non_negative(field):
-    config = AdsorptionConfig(**{**{field: 0.0}})
+    config = AdsorptionConfig(**{field: 0.0})
     assert getattr(config, field) == 0.0
     with pytest.raises(ValueError, match=f"{field}.*non-negative"):
-        AdsorptionConfig(**{**{field: -0.1}})
+        AdsorptionConfig(**{field: -0.1})
 
 
 @pytest.mark.parametrize(
@@ -587,14 +587,14 @@ def test_dedup_threshold_non_negative(field):
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
 def test_nonfinite_positive_float_rejected(field, bad):
     with pytest.raises(ValueError, match=f"{field}.*positive"):
-        AdsorptionConfig(**{**{field: bad}})
+        AdsorptionConfig(**{field: bad})
 
 
 @pytest.mark.parametrize("field", ["energy_dedup_threshold", "rmsd_dedup_threshold"])
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
 def test_nonfinite_dedup_threshold_rejected(field, bad):
     with pytest.raises(ValueError, match=f"{field}.*non-negative"):
-        AdsorptionConfig(**{**{field: bad}})
+        AdsorptionConfig(**{field: bad})
 
 
 # ---------------------------------------------------------------------------

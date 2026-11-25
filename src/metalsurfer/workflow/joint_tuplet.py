@@ -29,11 +29,7 @@ from ..models import (
     ReferenceEnergies,
     ScreeningResult,
 )
-from ..placement.generators import (
-    _spec_grid_info,
-    estimate_placement_spec_capacity,
-    log_site_sample,
-)
+from ..placement.generators import log_site_sample
 from ..placement.site_context import SiteContext, site_context_for_sampling
 from ..reporting import BOPlacementFailure, FailureSummary, PlacementFailure
 from ..surface_prep import Substrate
@@ -56,6 +52,7 @@ from .composite import (
 from .placement_fill import fill_materialized_placements, materialize_specs
 from .shared import (
     _build_surface_reference_slab,
+    _prepare_bo_pool_stage,
     _prepare_molecule_screening,
     adsorption_ranking_energy,
     joint_config_ranking_energy,
@@ -488,7 +485,7 @@ def screen_joint_tuplet_multi(
             )
         mol = active_molecules[0]
         site_ids = [int(pose.placement_descriptor.site_index) for pose in pools[mol]]
-        positions, types = _catalog_frame(site_context, site_ids)
+        positions, types = _catalog_site_geometry(site_context, site_ids)
         groups = assemble_joint_config_groups(
             pools[mol],
             n_per_config=n,
@@ -508,7 +505,7 @@ def screen_joint_tuplet_multi(
             for pool in pools.values()
             for pose in pool
         ]
-        positions, types = _catalog_frame(site_context, site_ids)
+        positions, types = _catalog_site_geometry(site_context, site_ids)
         for quotas, n_share in zip(compositions, per_comp_budgets, strict=True):
             if n_share <= 0:
                 continue
@@ -541,35 +538,24 @@ def screen_joint_tuplet_multi(
     )
 
 
-def _catalog_frame(
-    site_context: SiteContext | None,
-    site_ids: Sequence[int | None],
-) -> tuple[dict[int, np.ndarray] | None, dict[int, str] | None]:
-    """Catalog waypoints, or ``(None, None)`` when the caller has no catalog."""
-    geometry = _catalog_site_geometry(site_context, site_ids)
-    if geometry is None:
-        return None, None
-    return geometry
-
-
 def _catalog_site_geometry(
     site_context: SiteContext | None,
     site_ids: Sequence[int | None],
-) -> tuple[dict[int, np.ndarray], dict[int, str]] | None:
-    """Full catalog xyz and site types, or None when a pool id is missing.
+) -> tuple[dict[int, np.ndarray] | None, dict[int, str] | None]:
+    """Full catalog xyz and site types, or ``(None, None)`` when unavailable.
 
     Every catalog site is a neighbor-graph waypoint. *site_ids* must all
     resolve so a pose cannot point outside the lattice. Occupancy still
     counts only the sites already packed.
     """
     if site_context is None:
-        return None
+        return None, None
     sites = site_context.sites
     if not sites:
-        return None
+        return None, None
     for sid in site_ids:
         if sid is None or sid < 0 or sid >= len(sites):
-            return None
+            return None, None
     positions = {
         index: np.asarray(site.xyz, dtype=float) for index, site in enumerate(sites)
     }
@@ -608,7 +594,7 @@ def _assemble_bo_joint_groups_from_specs(
     pool_index_sets: list[set[int]] = []
     committed: set[int] = set(blocked or ())
     count_phase = 0
-    catalog, catalog_types = _catalog_frame(
+    catalog, catalog_types = _catalog_site_geometry(
         site_context,
         [
             all_specs[valid_spec_indices[pos]].site_index
@@ -679,21 +665,12 @@ def _assemble_bo_joint_groups_from_specs(
         else:
             positions = catalog
 
-        site_map = positions
-
-        def _positions_at(
-            _current: Sequence[ScreeningResult],
-            _chosen: Sequence[int],
-            sites: Mapping[int, np.ndarray] = site_map,
-        ) -> Mapping[int, np.ndarray]:
-            return sites
-
         group, chosen, count_phase = _grow_packed_group(
             group,
             candidates,
             pose_at=_pose_at,
             site_at=_site_at,
-            positions_at=_positions_at,
+            positions_at=lambda _current, _chosen, sites=positions: sites,
             slab_atoms=slab.atoms,
             config=config,
             material_type=slab.material_type,
@@ -780,42 +757,7 @@ def process_joint_tuplet_bayesian(
     if config.num_placements is None:
         raise ValueError("num_placements required for joint BO")
 
-    grid_info = (
-        _spec_grid_info(
-            conformers,
-            slab_for_sites,
-            config,
-            smiles,
-            site_context,
-            full_slab=slab.atoms,
-            material_type=slab.material_type,
-        )
-        if conformers
-        else None
-    )
-    max_enumerated_specs = estimate_placement_spec_capacity(
-        conformers,
-        slab_for_sites,
-        config,
-        smiles,
-        site_context=site_context,
-        full_slab=slab.atoms,
-        grid_info=grid_info,
-        material_type=slab.material_type,
-    )
-    pool_size = (
-        config.bo.candidate_pool_size
-        if config.bo.candidate_pool_size is not None
-        else max_enumerated_specs
-    )
-    if pool_size <= 0:
-        return JointTupletScreenOutcome(
-            [],
-            [],
-            failure_summary=BOPlacementFailure(n_candidate_specs=0, n_valid_pool=0),
-        )
-
-    pool, n_candidate_specs = prepare_bo_pool(
+    stage = _prepare_bo_pool_stage(
         conformers=conformers,
         slab=slab,
         slab_for_sites=slab_for_sites,
@@ -823,20 +765,22 @@ def process_joint_tuplet_bayesian(
         smiles=smiles,
         molecule_name=molecule_name,
         surface_type=surface_type,
-        pool_size=pool_size,
         site_context=site_context,
         conformer_energies=conformer_energies,
-        grid_info=grid_info,
+        pool_prep_fn=prepare_bo_pool,
     )
-    if pool is None:
+    if stage.pool is None:
         return JointTupletScreenOutcome(
             [],
             [],
             failure_summary=BOPlacementFailure(
-                n_candidate_specs=n_candidate_specs,
+                n_candidate_specs=stage.n_candidate_specs,
                 n_valid_pool=0,
             ),
         )
+    max_enumerated_specs = stage.max_enumerated_specs
+    grid_info = stage.grid_info
+    pool = stage.pool
     all_specs = pool.all_specs
     candidate_features = pool.candidate_features
     valid_spec_indices = pool.valid_spec_indices

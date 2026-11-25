@@ -36,9 +36,7 @@ from ..models import (
     ScreeningResult,
 )
 from ..placement.generators import (
-    _spec_grid_info,
     enumerate_placement_specs,
-    estimate_placement_spec_capacity,
     log_site_sample,
 )
 from ..placement.site_context import SiteContext
@@ -46,14 +44,14 @@ from ..reporting import (
     BOPlacementFailure,
     BOValidationFailure,
     FailureSummary,
-    FilterFailure,
 )
 from ..surface_prep import Substrate
 from .core import _evaluate_placement_batch
 from .shared import (
     MoleculeScreenOutcome,
     PlacementFailureEvent,
-    _filter_and_label_duplicates,
+    _finalize_screen_results,
+    _prepare_bo_pool_stage,
     _prepare_molecule_screening,
     _summarize_failure_events,
     _unique_relaxed_message,
@@ -629,47 +627,11 @@ def process_molecule_bayesian(
         raise ValueError("config.bo.initial_random must be set for Bayesian screening")
     if config.bo.batch_size is None:
         raise ValueError("config.bo.batch_size must be set for Bayesian screening")
-    num_placements = config.num_placements
-    if num_placements is None:
+    if config.num_placements is None:
         raise ValueError("config.num_placements must be set for Bayesian screening")
     bo_eval_budget = resolved_bo_eval_budget(config)
 
-    grid_info = (
-        _spec_grid_info(
-            conformers,
-            slab_for_sites,
-            config,
-            smiles,
-            site_context,
-            full_slab=slab.atoms,
-            material_type=slab.material_type,
-        )
-        if conformers
-        else None
-    )
-    max_enumerated_specs = estimate_placement_spec_capacity(
-        conformers,
-        slab_for_sites,
-        config,
-        smiles,
-        site_context=site_context,
-        full_slab=slab.atoms,
-        grid_info=grid_info,
-        material_type=slab.material_type,
-    )
-    if config.bo.candidate_pool_size is not None:
-        pool_size = config.bo.candidate_pool_size
-    else:
-        pool_size = max_enumerated_specs
-        if pool_size <= 0:
-            logger.warning(
-                "No enumerated placement capacity for BO (max_enumerated_specs=%d)",
-                max_enumerated_specs,
-            )
-            return _bail_outcome(
-                BOPlacementFailure(n_candidate_specs=0, n_valid_pool=0)
-            )
-    pool, n_candidate_specs = prepare_bo_pool(
+    stage = _prepare_bo_pool_stage(
         conformers=conformers,
         slab=slab,
         slab_for_sites=slab_for_sites,
@@ -677,13 +639,22 @@ def process_molecule_bayesian(
         smiles=smiles,
         molecule_name=molecule_name,
         surface_type=surface_type,
-        pool_size=pool_size,
         site_context=site_context,
         conformer_energies=conformer_energies,
-        grid_info=grid_info,
+        pool_prep_fn=prepare_bo_pool,
     )
-    if pool is None:
-        if n_candidate_specs == 0:
+    max_enumerated_specs = stage.max_enumerated_specs
+    grid_info = stage.grid_info
+    if stage.pool is None:
+        if stage.capacity_exhausted:
+            logger.warning(
+                "No enumerated placement capacity for BO (max_enumerated_specs=%d)",
+                max_enumerated_specs,
+            )
+            return _bail_outcome(
+                BOPlacementFailure(n_candidate_specs=0, n_valid_pool=0)
+            )
+        if stage.n_candidate_specs == 0:
             logger.warning("No candidate specs generated for BO")
             return _bail_outcome(
                 BOPlacementFailure(n_candidate_specs=0, n_valid_pool=0)
@@ -691,11 +662,12 @@ def process_molecule_bayesian(
         logger.warning("BO: no specs produced valid placements; aborting")
         return _bail_outcome(
             BOPlacementFailure(
-                n_candidate_specs=n_candidate_specs,
+                n_candidate_specs=stage.n_candidate_specs,
                 n_valid_pool=0,
             )
         )
 
+    pool = stage.pool
     all_specs = pool.all_specs
     candidate_features = pool.candidate_features
     valid_spec_indices = pool.valid_spec_indices
@@ -922,7 +894,7 @@ def process_molecule_bayesian(
         )
 
     # BO also builds failure-penalty negatives for rejected non-duplicates.
-    filtered, bo_duplicate_results, _t_filtering = _filter_and_label_duplicates(
+    filtered, _, filter_failure, bo_duplicate_results = _finalize_screen_results(
         all_results,
         slab_atoms=slab.atoms,
         reference_smiles=reference_smiles,
@@ -975,12 +947,8 @@ def process_molecule_bayesian(
     if not filtered:
         logger.info("%s", uniqueness)
         _flush_bo_outputs()
-        return _bail_outcome(
-            FilterFailure(
-                n_before_filter=len(all_results),
-                n_after_filter=0,
-            )
-        )
+        assert filter_failure is not None
+        return _bail_outcome(filter_failure)
     logger.info(
         "%s, E_ads range [%.4f, %.4f]",
         uniqueness,

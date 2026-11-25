@@ -62,36 +62,8 @@ _LAZY_MODULES: dict[str, set[str]] = {
 }
 
 
-__all__ = [
-    "Substrate",
-    "accept_substrate_for_api",
-    "apply_material_pbc",
-    "apply_surface_constraints",
-    "auto_resize_substrate_for_molecule",
-    "check_frozen_substrate_displacement",
-    "coerce_substrate",
-    "compute_frozen_indices",
-    "compute_minimum_supercell",
-    "create_slab_from_atoms",
-    "create_slab_from_bulk",
-    "deposit_adatoms",
-    "ensure_slab_z_alignment",
-    "finalize_substrate",
-    "format_atom_index_ranges",
-    "frozen_indices_from_constraints",
-    "identify_relaxable_surface_indices",
-    "log_substrate_freeze_policy",
-    "max_frozen_substrate_displacement",
-    "prepare_substrate",
-    "relax_substrate",
-    "resize_substrate_for_molecule",
-    "substitute_alloy",
-    "top_layer_indices_by_height",
-    "validate_substrate",
-    "validate_substrate_conformer_sizing",
-]
-
 _NAME_TO_MODULE = {n: m for m, names in _LAZY_MODULES.items() for n in names}
+__all__ = sorted(_NAME_TO_MODULE)
 
 
 def __getattr__(name: str) -> Any:

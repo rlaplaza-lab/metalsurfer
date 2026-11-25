@@ -5,7 +5,7 @@ from collections.abc import Callable
 
 import numpy as np
 from ase import Atoms
-from scipy.spatial import Delaunay, QhullError
+from scipy.spatial import Delaunay
 
 from .._numeric_defaults import DEFAULT_N_JOBS
 from .._utils import cell_has_volume
@@ -52,8 +52,10 @@ from .site_coords import (
     _top_layer_tolerance_from_mean_radius,
     _union_find_cluster,
     _wrap_fractional,
+    periodic_accessibility_tree,
     top_layer_mask_by_normal,
 )
+from .site_np import try_delaunay
 from .site_plugins import (
     SiteGenerationContext,
     resolve_site_generator,
@@ -63,9 +65,6 @@ from .site_plugins.helpers import (
 )
 from .site_plugins.helpers import (
     bounding_box_cell as _bounding_box_cell,
-)
-from .site_plugins.helpers import (
-    periodic_accessibility_tree as _periodic_accessibility_tree,
 )
 from .site_plugins.helpers import (
     top_layer_is_planar_from_arrays as _top_layer_is_planar_from_arrays,
@@ -110,15 +109,11 @@ def _delaunay_classify_inputs(
         raise ValueError(
             "slab_top_atom_indices must be set for Delaunay classification"
         )
-    if len(slab_top_atom_indices) < 3:
-        return None
     top_positions_2d = _project_to_slab_plane(positions[slab_top_atom_indices], cell)
     tri = topology_primary_delaunay
     if tri is None:
-        try:
-            tri = Delaunay(top_positions_2d)
-        except (QhullError, ValueError, RuntimeError) as exc:
-            logger.debug("Delaunay classification disabled (%s)", exc)
+        tri = try_delaunay(top_positions_2d, delaunay_cls=Delaunay)
+        if tri is None:
             return None
     class_index = _build_delaunay_classification_index(
         top_positions_2d,
@@ -431,7 +426,7 @@ def _enumerate_unified_sites(
     atom_indices = list(batch.atom_indices)
     normals = batch.normals
     clearances = batch.clearances
-    local_tree = _periodic_accessibility_tree(
+    local_tree = periodic_accessibility_tree(
         positions,
         cell,
         pbc_for_sites,

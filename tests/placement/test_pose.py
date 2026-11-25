@@ -38,14 +38,11 @@ from metalsurfer.placement.pose import (
     _PlacementContext,
     _validate_posed_adsorbate,
     _z_fraction_from_com_height,
-    build_pose_batch_cache,
     generate_placement_from_pose,
 )
 from metalsurfer.placement.site_context import (
     _get_unique_sites_for_specs,
 )
-from metalsurfer.placement.site_coords import _derive_top_layer_tolerance
-from metalsurfer.placement.site_enumeration import _get_site_surface_radii
 from metalsurfer.placement.site_types import Site
 from metalsurfer.surface_prep import apply_surface_constraints
 
@@ -727,18 +724,6 @@ def test_lateral_offset_on_triclinic_slab_preserves_slab_normal_height():
     pinv_point = frac2 @ cell[:2]
     pinv_point = pinv_point + float(np.dot(center - pinv_point, n_hat)) * n_hat
     assert not np.allclose(wrapped, pinv_point, atol=1e-4)
-
-
-def test_pose_batch_cache_surface_radii_use_derived_top_depth():
-    """Cached top-layer radii must match ``_get_site_surface_radii``, not planarity tol."""
-    slab = make_slab()
-    config = AdsorptionConfig()
-    derived = float(_derive_top_layer_tolerance(list(slab.get_chemical_symbols())))
-    assert derived != float(config.top_layer_tolerance)
-    cache = build_pose_batch_cache(slab, [], config)
-    assert cache.r_surface_top_layer == pytest.approx(
-        _get_site_surface_radii(slab, None)
-    )
 
 
 def test_water_en_down_contact_atom_is_oxygen():

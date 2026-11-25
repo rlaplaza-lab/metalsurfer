@@ -102,6 +102,12 @@ def process_molecule(
     debug_sites_step
         Saturation step index for ``debug_write_sites`` filenames (optional).
     """
+
+    def _outcome(
+        results: list[ScreeningResult], failure: FailureSummary | None
+    ) -> MoleculeScreenOutcome:
+        return MoleculeScreenOutcome(results=results, failure_summary=failure)
+
     if reference_smiles is None:
         reference_smiles = smiles
 
@@ -140,10 +146,7 @@ def process_molecule(
         )
         if ctx is None:
             assert early_failure is not None
-            return MoleculeScreenOutcome(
-                results=[],
-                failure_summary=early_failure,
-            )
+            return _outcome([], early_failure)
 
         slab = ctx.slab
         slab_for_sites = ctx.slab_for_sites
@@ -208,9 +211,9 @@ def process_molecule(
 
         if not all_combined:
             logger.warning("No valid placements")
-            return MoleculeScreenOutcome(
-                results=[],
-                failure_summary=PlacementFailure(
+            return _outcome(
+                [],
+                PlacementFailure(
                     n_placements_attempted=(
                         0 if config.num_placements is None else config.num_placements
                     ),
@@ -285,10 +288,7 @@ def process_molecule(
                     n_optimization_failed=n_optimization_failed,
                     validation_failures=validation_failures,
                 )
-            return MoleculeScreenOutcome(
-                results=[],
-                failure_summary=failure,
-            )
+            return _outcome([], failure)
 
         results, t_filtering, filter_failure, duplicates = _finalize_screen_results(
             results,
@@ -321,10 +321,7 @@ def process_molecule(
             t_mol_total,
         )
 
-        return MoleculeScreenOutcome(
-            results=results,
-            failure_summary=filter_failure,
-        )
+        return _outcome(results, filter_failure)
 
 
 def _evaluate_placement_batch(

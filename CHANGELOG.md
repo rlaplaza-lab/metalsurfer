@@ -34,6 +34,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``BO_TRANSFER_MIN_SIMILARITY_DEFAULT``, ``RMSD_DEDUP_THRESHOLD_DEFAULT_ANGSTROM``,
   ``ENERGY_DEDUP_THRESHOLD_DEFAULT_EV``, and ``DEFAULT_SLAB_TOP_VACUUM_ANG``.
   Config fields and helper kwarg defaults share one value per knob.
+- An empty adsorption campaign worklist emits a ``UserWarning`` only.
+  Saturation still logs the same message with ``logger.warning``.
+- Unknown campaign ``config:`` keys are reported together in one error, each
+  with a close-match hint.
+- Batched TorchSim relaxation (isolated molecules and slab+adsorbate) clears
+  the CUDA cache before the first attempt. The out-of-memory retry still
+  clears again after a failure.
+- Delaunay and convex-hull failures are logged at debug from the shared Qhull
+  wrapper.
+- Nearest-neighbour MIC distances, the median fallback, and periodic
+  accessibility trees live in ``site_coords``. Dissociative adjacent pairs and
+  PBC dedup share one minimum-image pair helper. Similarity transfer and
+  cumulative refit share one training round;
+  :class:`TransferSurrogateResult` defaults every field except ``surrogate``.
 
 ### Removed
 
@@ -42,6 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The redundant ``material_type`` membership re-check inside
   ``validate_substrate``; ``require_atoms_pbc_matches_material`` performs the
   same validation.
+- Private re-exports ``metalsurfer.ml.bayesian._align_to_columns`` and
+  ``_transfer_trust_gate``. ``_capped_prior_weights`` stays importable.
 
 ### Fixed
 
@@ -56,6 +72,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rolling-probe contact filtering passes its 0.35 threshold through it.
 - The 1.35 contact scale in porous atop-injection coverage now reads
   ``CONTACT_COVALENT_SCALE_DEFAULT``.
+- Ligand site offsets use the shared periodic delta, so a singular cell
+  returns the Cartesian delta instead of raising ``LinAlgError``.
 
 ## [0.10.0] - 2026-11-11
 

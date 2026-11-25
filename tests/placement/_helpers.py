@@ -38,6 +38,8 @@ _MATERIAL_FACTORIES = {
     "porous": make_porous_framework,
 }
 
+MATERIAL_CASES = tuple(_MATERIAL_FACTORIES.items())
+
 # Every allowed (material_type, plugin, factory) pair from PLUGIN_ALLOWED_MATERIALS.
 PLUGIN_MATERIAL_CASES = [
     (mat, plugin, _MATERIAL_FACTORIES[mat])

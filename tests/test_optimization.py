@@ -1001,6 +1001,43 @@ def test_optimize_slab_raises_without_torchsim(monkeypatch: pytest.MonkeyPatch):
         )
 
 
+def test_optimize_slab_setup_failure_not_masked_by_unbound_local(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A failure before ``max_n_atoms`` is assigned must not be masked.
+
+    ``max_n_atoms`` is read in ``finally`` to drive threshold eviction; if the
+    setup raises before assignment, an unbound local would replace the real
+    error with ``UnboundLocalError``.
+    """
+
+    class _FakeTs:
+        Optimizer = MagicMock()
+
+        @staticmethod
+        def generate_force_convergence_fn(force_tol, include_cell_forces):
+            _ = (force_tol, include_cell_forces)
+            return object()
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("setup boom")
+
+    monkeypatch.setattr(_deps, "ts", _FakeTs())
+    monkeypatch.setattr(_deps, "ts_constraints", object())
+    monkeypatch.setattr(_deps, "InFlightAutoBatcher", object())
+    monkeypatch.setattr(_optimize, "_setup_inflight_autobatcher", _boom)
+    _cache._AUTOBATCHER_CACHE.clear()
+
+    slab = _make_atoms_with_cell()
+    with pytest.raises(RuntimeError, match="setup boom"):
+        _optimize.optimize_adsorbate_slab_batched(
+            [slab.copy()],
+            slab,
+            ts_model=type("MockModel", (), {"device": "cpu"})(),
+            config=AdsorptionConfig(device="cpu"),
+        )
+
+
 def test_optimize_slab_raises_on_batch_size_mismatch(monkeypatch: pytest.MonkeyPatch):
     """A short batch must raise, not silently return all-None placements.
 

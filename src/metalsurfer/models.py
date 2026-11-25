@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import MISSING, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Literal, assert_never, cast
 
@@ -26,6 +26,7 @@ from ._csv_coerce import (
 from ._csv_coerce import (
     parse_fragment_positions as _row_parse_fragment_positions,
 )
+from ._csv_coerce import require_key
 from .reporting import (
     FailureSummary,
 )
@@ -176,13 +177,118 @@ def provenance_export_fields(values: Mapping[str, Any]) -> dict[str, Any]:
 
 def _require_row_value(row: Mapping[str, Any], key: str) -> Any:
     """Return a required CSV cell; missing or blank raises ``ValueError``."""
-    if key not in row or _row_is_missing(row.get(key)):
+    value = require_key(row, key)
+    if _row_is_missing(value):
         raise ValueError(f"missing required column {key!r}")
-    return row[key]
+    return value
 
 
 def _row_has_initial_columns(row: Mapping[str, Any]) -> bool:
     return any(isinstance(key, str) and key.startswith("initial_") for key in row)
+
+
+def _initial_cell(row: Mapping[str, Any], attr: str) -> Any:
+    return row[INITIAL_PROVENANCE_COLUMN_MAP[attr]]
+
+
+def _require_initial(row: Mapping[str, Any], attr: str) -> Any:
+    return _require_row_value(row, INITIAL_PROVENANCE_COLUMN_MAP[attr])
+
+
+def _coerce_slab_indices(value: Any) -> tuple[int, ...] | None:
+    if _row_is_missing(value):
+        return None
+    return tuple(int(x) for x in str(value).split(","))
+
+
+def _coerce_site_type(value: Any) -> str | None:
+    return None if _row_is_missing(value) else str(value)
+
+
+_LEAN_POSE_COLUMNS: tuple[tuple[str, Callable[[Any], Any]], ...] = (
+    ("conformer_index", int),
+    ("x_abs", float),
+    ("y_abs", float),
+    ("z_abs", float),
+    ("surface_ref_z_abs", float),
+    ("quat_w", float),
+    ("quat_x", float),
+    ("quat_y", float),
+    ("quat_z", float),
+)
+
+# Lean-row placeholders for fields without a dataclass default (or whose lean
+# placeholder differs from it); every other default is derived from
+# ``PlacementDescriptor`` by :func:`_lean_placeholder_values`.
+_LEAN_PLACEHOLDER_DEFAULTS: dict[str, Any] = {
+    "orientation_type": "round",
+    "face_flip": False,
+    "en_atom_index": None,
+    "site_index": -1,
+    "site_type": None,
+    "tilt_deg": 0.0,
+    "azimuth_deg": 0.0,
+    "azimuth_in_plane_deg": 0.0,
+    "z_fraction": 0.5,
+    "x": 0.0,
+    "y": 0.0,
+    "z_offset": 0.0,
+    "site_xy_frac_a": 0.0,
+    "site_xy_frac_b": 0.0,
+}
+
+_RICH_FIELD_COERCERS: dict[str, Callable[[Mapping[str, Any]], Any]] = {
+    "orientation_type": lambda row: cast(
+        Literal["parallel", "EN-down", "vertical", "round", "dissociative"],
+        str(_require_initial(row, "orientation_type")),
+    ),
+    "face_flip": lambda row: _row_parse_bool(
+        _require_initial(row, "face_flip"), default=False
+    ),
+    "en_atom_index": lambda row: _row_int_or_none(_initial_cell(row, "en_atom_index")),
+    "site_index": lambda row: int(_require_initial(row, "site_index")),
+    "site_type": lambda row: _coerce_site_type(_initial_cell(row, "site_type")),
+    "tilt_deg": lambda row: float(_require_initial(row, "tilt_deg")),
+    "azimuth_deg": lambda row: float(_require_initial(row, "azimuth_deg")),
+    "azimuth_in_plane_deg": lambda row: float(
+        _require_initial(row, "azimuth_in_plane_deg")
+    ),
+    "z_fraction": lambda row: float(_require_initial(row, "z_fraction")),
+    "x": lambda row: float(_require_initial(row, "x")),
+    "y": lambda row: float(_require_initial(row, "y")),
+    "z_offset": lambda row: float(_require_initial(row, "z_offset")),
+    "surface_ref_z_abs": lambda row: float(_require_initial(row, "surface_ref_z_abs")),
+    "shape": lambda row: str(_require_initial(row, "shape")),
+    "slab_indices": lambda row: _coerce_slab_indices(
+        _initial_cell(row, "slab_indices")
+    ),
+    "placement_mode_resolved": lambda row: str(
+        _require_initial(row, "placement_mode_resolved")
+    ),
+    "site_source": lambda row: str(_require_initial(row, "site_source")),
+    "site_reference_frame": lambda row: str(
+        _require_initial(row, "site_reference_frame")
+    ),
+    "site_xy_frac_a": lambda row: _row_float_or_none(
+        _initial_cell(row, "site_xy_frac_a")
+    ),
+    "site_xy_frac_b": lambda row: _row_float_or_none(
+        _initial_cell(row, "site_xy_frac_b")
+    ),
+    "fragment_positions": lambda row: _row_parse_fragment_positions(
+        _initial_cell(row, "fragment_positions")
+    ),
+}
+
+
+def _lean_placeholder_values() -> dict[str, Any]:
+    values = {
+        f.name: f.default
+        for f in fields(PlacementDescriptor)
+        if f.default is not MISSING
+    }
+    values.update(_LEAN_PLACEHOLDER_DEFAULTS)
+    return values
 
 
 @dataclass
@@ -295,15 +401,10 @@ class PlacementDescriptor:
         placement_index
             Optional placement index to override the row value.
         """
-        conformer_index = int(_require_row_value(row, "conformer_index"))
-        x_abs = float(_require_row_value(row, "x_abs"))
-        y_abs = float(_require_row_value(row, "y_abs"))
-        z_abs = float(_require_row_value(row, "z_abs"))
-        surface_ref_z_abs = float(_require_row_value(row, "surface_ref_z_abs"))
-        quat_w = float(_require_row_value(row, "quat_w"))
-        quat_x = float(_require_row_value(row, "quat_x"))
-        quat_y = float(_require_row_value(row, "quat_y"))
-        quat_z = float(_require_row_value(row, "quat_z"))
+        pose = {
+            name: coerce(_require_row_value(row, name))
+            for name, coerce in _LEAN_POSE_COLUMNS
+        }
         if placement_index is not None:
             pid = int(placement_index)
         elif "placement_id" in row and not _row_is_missing(row.get("placement_id")):
@@ -319,38 +420,10 @@ class PlacementDescriptor:
             )
 
         if not _row_has_initial_columns(row):
-            return cls(
-                conformer_index=conformer_index,
-                orientation_type="round",
-                face_flip=False,
-                en_atom_index=None,
-                site_index=-1,
-                site_type=None,
-                tilt_deg=0.0,
-                azimuth_deg=0.0,
-                azimuth_in_plane_deg=0.0,
-                z_fraction=0.5,
-                placement_index=pid,
-                x=0.0,
-                y=0.0,
-                z_offset=0.0,
-                x_abs=x_abs,
-                y_abs=y_abs,
-                surface_ref_z_abs=surface_ref_z_abs,
-                z_abs=z_abs,
-                shape="round",
-                slab_indices=None,
-                placement_mode_resolved="no_sites",
-                site_source="no_sites",
-                site_reference_frame="global_top_layer",
-                site_xy_frac_a=0.0,
-                site_xy_frac_b=0.0,
-                quat_w=quat_w,
-                quat_x=quat_x,
-                quat_y=quat_y,
-                quat_z=quat_z,
-                fragment_positions=None,
-            )
+            values = _lean_placeholder_values()
+            values.update(pose)
+            values["placement_index"] = pid
+            return cls(**values)
 
         missing_initial = [
             col for col in INITIAL_PROVENANCE_COLUMN_MAP.values() if col not in row
@@ -361,64 +434,22 @@ class PlacementDescriptor:
                 + ", ".join(sorted(missing_initial))
             )
 
-        def _initial(attr: str) -> Any:
-            return row[INITIAL_PROVENANCE_COLUMN_MAP[attr]]
-
-        slab_indices_raw = _initial("slab_indices")
-        slab_indices = None
-        if not _row_is_missing(slab_indices_raw):
-            slab_indices = tuple(int(x) for x in str(slab_indices_raw).split(","))
-
-        site_type_raw = _initial("site_type")
-        site_type = None if _row_is_missing(site_type_raw) else str(site_type_raw)
-
-        return cls(
-            conformer_index=conformer_index,
-            orientation_type=cast(
-                Literal["parallel", "EN-down", "vertical", "round", "dissociative"],
-                str(_require_row_value(row, "initial_orientation_type")),
-            ),
-            face_flip=_row_parse_bool(
-                _require_row_value(row, "initial_face_flip"), default=False
-            ),
-            en_atom_index=_row_int_or_none(_initial("en_atom_index")),
-            site_index=int(_require_row_value(row, "initial_site_index")),
-            site_type=site_type,
-            tilt_deg=float(_require_row_value(row, "initial_tilt_deg")),
-            azimuth_deg=float(_require_row_value(row, "initial_azimuth_deg")),
-            azimuth_in_plane_deg=float(
-                _require_row_value(row, "initial_azimuth_in_plane_deg")
-            ),
-            z_fraction=float(_require_row_value(row, "initial_z_fraction")),
-            placement_index=pid,
-            x=float(_require_row_value(row, "initial_x")),
-            y=float(_require_row_value(row, "initial_y")),
-            z_offset=float(_require_row_value(row, "initial_z_offset")),
-            x_abs=x_abs,
-            y_abs=y_abs,
-            surface_ref_z_abs=float(
-                _require_row_value(row, "initial_surface_ref_z_abs")
-            ),
-            z_abs=z_abs,
-            shape=str(_require_row_value(row, "initial_shape")),
-            slab_indices=slab_indices,
-            placement_mode_resolved=str(
-                _require_row_value(row, "initial_placement_mode_resolved")
-            ),
-            site_source=str(_require_row_value(row, "initial_site_source")),
-            site_reference_frame=str(
-                _require_row_value(row, "initial_site_reference_frame")
-            ),
-            site_xy_frac_a=_row_float_or_none(_initial("site_xy_frac_a")),
-            site_xy_frac_b=_row_float_or_none(_initial("site_xy_frac_b")),
-            quat_w=quat_w,
-            quat_x=quat_x,
-            quat_y=quat_y,
-            quat_z=quat_z,
-            fragment_positions=_row_parse_fragment_positions(
-                _initial("fragment_positions")
-            ),
-        )
+        # Lean pose columns stay authoritative except surface_ref_z_abs, which
+        # the rich provenance block overrides (matches the original behavior).
+        values = {
+            name: value for name, value in pose.items() if name != "surface_ref_z_abs"
+        }
+        values["placement_index"] = pid
+        for f in fields(cls):
+            if f.name in values:
+                continue
+            coercer = _RICH_FIELD_COERCERS.get(f.name)
+            if coercer is None:
+                raise ValueError(
+                    f"no rich-row coercer for PlacementDescriptor field {f.name!r}"
+                )
+            values[f.name] = coercer(row)
+        return cls(**values)
 
 
 @dataclass

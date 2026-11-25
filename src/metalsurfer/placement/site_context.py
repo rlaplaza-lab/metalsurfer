@@ -297,7 +297,6 @@ def attach_ligand_sites(
     ctx: SiteContext,
     slab: Atoms,
     full_slab: Atoms | None,
-    config: AdsorptionConfig,
     *,
     material_type: str,
 ) -> SiteContext:
@@ -370,9 +369,7 @@ def site_context_for_sampling(
             material_type=material_type,
             symmetry_broken=False,
         )
-    return attach_ligand_sites(
-        ctx, slab, full_slab, config, material_type=material_type
-    )
+    return attach_ligand_sites(ctx, slab, full_slab, material_type=material_type)
 
 
 def _get_unique_sites_for_specs(

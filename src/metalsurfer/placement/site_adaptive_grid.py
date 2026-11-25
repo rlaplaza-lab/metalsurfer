@@ -70,9 +70,10 @@ from .site_coords import (
     _deduplicate_points,
     _wrap_cartesian,
     clearance_monotonic_mask,
+    median_nn_or_fallback,
+    periodic_accessibility_tree,
     project_anchor_to_support_plane,
 )
-from .site_plugins.helpers import median_nn_or_fallback, periodic_accessibility_tree
 from .site_wall_near_common import (
     AdaptiveGridResult,
     AdaptiveGridSpacing,

@@ -16,7 +16,7 @@ BO occupancy-sigma decision (placement, n-tuplet packing, clash recovery).
 import logging
 import time
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import numpy as np
 from ase import Atoms
@@ -57,13 +57,11 @@ logger = logging.getLogger(__name__)
 def _pbc_for_cell(material_type: str, cell: np.ndarray) -> list[bool]:
     """Material-aware PBC; raise if a periodic material has a degenerate cell."""
     pbc = material_aware_pbc(material_type)
-    if not cell_has_volume(cell):
-        if any(pbc):
-            raise ValueError(
-                f"cell is degenerate while material_type={material_type!r} "
-                "expects periodic boundaries"
-            )
-        return [False, False, False]
+    if not cell_has_volume(cell) and any(pbc):
+        raise ValueError(
+            f"cell is degenerate while material_type={material_type!r} "
+            "expects periodic boundaries"
+        )
     return pbc
 
 
@@ -129,13 +127,18 @@ def _nonsurface_distance_and_threshold(
     return syms, coords, dist_matrix, threshold
 
 
+def _bonded_matrix(dist_matrix: np.ndarray, threshold_matrix: np.ndarray) -> np.ndarray:
+    """Full boolean adjacency matrix where distance <= threshold, no self-bonds."""
+    bonded = dist_matrix <= threshold_matrix
+    np.fill_diagonal(bonded, False)
+    return bonded
+
+
 def _adjacency_mask(
     dist_matrix: np.ndarray, threshold_matrix: np.ndarray
 ) -> np.ndarray:
     """Upper-triangle boolean mask where distance <= threshold."""
-    bonded = dist_matrix <= threshold_matrix
-    np.fill_diagonal(bonded, False)
-    return np.triu(bonded, k=1)
+    return np.triu(_bonded_matrix(dist_matrix, threshold_matrix), k=1)
 
 
 def _bond_counts_from_dist(
@@ -208,9 +211,7 @@ def _coordination_fingerprint_from_dist(
     threshold: np.ndarray,
 ) -> dict[str, list[int]]:
     """Per-element sorted coordination numbers from a distance matrix."""
-    bonded = dist_matrix <= threshold
-    np.fill_diagonal(bonded, False)
-    coord_counts = bonded.sum(axis=1).astype(int)
+    coord_counts = _bonded_matrix(dist_matrix, threshold).sum(axis=1).astype(int)
 
     fingerprint: dict[str, list[int]] = {}
     for i, s in enumerate(syms):
@@ -246,8 +247,7 @@ def _connected_components_from_coords(
 
     dist_matrix = _mic_pairwise_distances(coords, atoms, material_type=material_type)
     threshold = _covalent_threshold_matrix(syms, multiplier)
-    bonded = dist_matrix <= threshold
-    np.fill_diagonal(bonded, False)
+    bonded = _bonded_matrix(dist_matrix, threshold)
 
     n_components, labels = connected_components(bonded, directed=False)
     masks: list[np.ndarray] = []
@@ -404,8 +404,7 @@ def _is_molecule_connected_from_dist(
     """Return ``True`` if atoms form a single connected fragment."""
     if len(syms) <= 1:
         return True
-    bonded = dist_matrix <= threshold
-    np.fill_diagonal(bonded, False)
+    bonded = _bonded_matrix(dist_matrix, threshold)
     n_components, _ = connected_components(bonded, directed=False)
     return n_components == 1
 
@@ -413,6 +412,19 @@ def _is_molecule_connected_from_dist(
 # ---------------------------------------------------------------------------
 # individual filter predicates
 # ---------------------------------------------------------------------------
+
+
+def _mismatch_reason(
+    label: str,
+    expected,
+    actual,
+    *,
+    as_dict: bool,
+) -> str:
+    """Format a decomposition mismatch; counters render as plain dicts."""
+    if as_dict:
+        expected, actual = dict(expected), dict(actual)
+    return f"{label} mismatch: expected {expected}, got {actual}"
 
 
 def check_decomposition(
@@ -492,28 +504,22 @@ def check_decomposition(
     if ref_formula is not None:
         actual_formula = _formula_from_atoms(atoms, surface_symbols=surface_symbols)
         if actual_formula != ref_formula:
-            return (
-                False,
-                f"formula mismatch: expected {dict(ref_formula)}, "
-                f"got {dict(actual_formula)}",
+            return False, _mismatch_reason(
+                "formula", ref_formula, actual_formula, as_dict=True
             )
 
     if ref_bonds is not None:
         actual_bonds = _bond_counts_from_dist(syms, dist_matrix, threshold)
         if actual_bonds != ref_bonds:
-            return (
-                False,
-                f"bond pattern mismatch: expected {dict(ref_bonds)}, "
-                f"got {dict(actual_bonds)}",
+            return False, _mismatch_reason(
+                "bond pattern", ref_bonds, actual_bonds, as_dict=True
             )
 
     if ref_coord is not None:
         actual_coord = _coordination_fingerprint_from_dist(syms, dist_matrix, threshold)
         if actual_coord != ref_coord:
-            return (
-                False,
-                f"coordination fingerprint mismatch: expected {ref_coord}, "
-                f"got {actual_coord}",
+            return False, _mismatch_reason(
+                "coordination fingerprint", ref_coord, actual_coord, as_dict=False
             )
 
     if ref_formula is None and ref_bonds is None and ref_coord is None:
@@ -785,6 +791,49 @@ def _deduplicate_by_energy_and_rmsd(
 # ---------------------------------------------------------------------------
 
 
+def _run_filter_phase(
+    name: str,
+    entries: list[ScreeningResult],
+    predicate: Callable[[ScreeningResult], tuple[bool, str]],
+    *,
+    drop_noun: str,
+    report_reasons: bool = False,
+) -> list[ScreeningResult]:
+    """Apply a per-entry ``(ok, reason)`` predicate and log the outcome.
+
+    Shared scaffolding for the decomposition and desorption phases: timing,
+    per-entry debug logging, dropped counters, and the info summary.
+    """
+    t0 = time.perf_counter()
+    kept: list[ScreeningResult] = []
+    dropped = 0
+    reasons: dict[str, list[int]] = {}
+    for entry in entries:
+        ok, reason = predicate(entry)
+        if ok:
+            kept.append(entry)
+            continue
+        dropped += 1
+        if report_reasons:
+            reasons.setdefault(reason, []).append(entry.placement_id)
+        logger.debug("%s filter (pid=%s): %s", name, entry.placement_id, reason)
+
+    elapsed = time.perf_counter() - t0
+    if dropped:
+        logger.info("Filtered %d %s structures (%.3fs)", dropped, drop_noun, elapsed)
+        if report_reasons:
+            for reason, pids in sorted(reasons.items(), key=lambda item: -len(item[1])):
+                example = pids[0]
+                logger.info(
+                    "  %s reason (%d): %s  [example placement_id=%s]",
+                    name.lower(),
+                    len(pids),
+                    reason,
+                    example,
+                )
+    return kept
+
+
 def filter_results(
     results: list[ScreeningResult],
     slab: Atoms,
@@ -845,10 +894,6 @@ def filter_results(
         )
 
     if not config.skip_topology_check:
-        t0 = time.perf_counter()
-        kept: list[ScreeningResult] = []
-        decomp_count = 0
-        decomp_reasons: dict[str, list[int]] = {}  # reason -> [placement_ids]
         prefix = len(slab)
         ref_formula = (
             _formula_from_smiles(reference_smiles) if reference_smiles else None
@@ -866,8 +911,9 @@ def filter_results(
                         f"{expected_suffix}. Pass the cumulative substrate prefix (bare "
                         "slab + all previously accepted adsorbates) as `slab`."
                     )
-        for entry in results:
-            ok, reason = check_decomposition(
+
+        def _decomposition(entry: ScreeningResult) -> tuple[bool, str]:
+            return check_decomposition(
                 entry.atoms,
                 reference_smiles=reference_smiles,
                 surface_symbols=None,
@@ -875,67 +921,33 @@ def filter_results(
                 adsorbate_prefix_atoms=prefix,
                 material_type=material_type,
             )
-            if ok:
-                kept.append(entry)
-            else:
-                decomp_count += 1
-                if reason not in decomp_reasons:
-                    decomp_reasons[reason] = []
-                decomp_reasons[reason].append(entry.placement_id)
-                logger.debug(
-                    "Decomposition filter (pid=%s): %s",
-                    entry.placement_id,
-                    reason,
-                )
-        t_decomp = time.perf_counter() - t0
-        if decomp_count:
-            logger.info(
-                "Filtered %d decomposed structures (%.3fs)",
-                decomp_count,
-                t_decomp,
-            )
-            for reason, pids in sorted(
-                decomp_reasons.items(), key=lambda x: -len(x[1])
-            ):
-                example = pids[0] if pids else None
-                logger.info(
-                    "  decomposition reason (%d): %s  [example placement_id=%s]",
-                    len(pids),
-                    reason,
-                    example,
-                )
-        results = kept
+
+        results = _run_filter_phase(
+            "Decomposition",
+            results,
+            _decomposition,
+            drop_noun="decomposed",
+            report_reasons=True,
+        )
 
     # -- desorption -----------------------------------------------------------
     if not config.skip_desorption_check:
-        t0 = time.perf_counter()
-        kept = []
-        desorb_count = 0
-        for entry in results:
-            ok, reason = check_desorption(
+
+        def _desorption(entry: ScreeningResult) -> tuple[bool, str]:
+            return check_desorption(
                 entry.atoms,
                 slab,
                 binding_threshold=config.binding_distance_threshold,
                 material_type=material_type,
                 surface_prefix_atoms=surface_prefix_atoms,
             )
-            if ok:
-                kept.append(entry)
-            else:
-                desorb_count += 1
-                logger.debug(
-                    "Desorption filter (pid=%s): %s",
-                    entry.placement_id,
-                    reason,
-                )
-        t_desorb = time.perf_counter() - t0
-        if desorb_count:
-            logger.info(
-                "Filtered %d desorbed structures (%.3fs)",
-                desorb_count,
-                t_desorb,
-            )
-        results = kept
+
+        results = _run_filter_phase(
+            "Desorption",
+            results,
+            _desorption,
+            drop_noun="desorbed",
+        )
 
     # -- duplicates -----------------------------------------------------------
     if len(results) <= 1:

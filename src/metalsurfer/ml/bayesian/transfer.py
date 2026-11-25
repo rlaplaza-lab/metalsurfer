@@ -3,6 +3,7 @@
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 import numpy as np
@@ -42,12 +43,12 @@ class TransferSurrogateResult:
     """Outcome of one BO round's transfer-augmented surrogate training."""
 
     surrogate: Pipeline
-    transfer_used_this_round: bool
-    transfer_weight_share: float
-    transfer_mae_delta: float | None
-    transfer_bad_rounds: int
-    transfer_disabled: bool
-    transfer_disabled_reason: str | None
+    transfer_used_this_round: bool = False
+    transfer_weight_share: float = 0.0
+    transfer_mae_delta: float | None = None
+    transfer_bad_rounds: int = 0
+    transfer_disabled: bool = False
+    transfer_disabled_reason: str | None = None
 
 
 def _min_feature_distances(
@@ -353,15 +354,10 @@ def _transfer_trust_gate(
     return base_mae, transfer_mae, _fit_full_transfer(), True
 
 
-def _no_transfer(baseline: Any, transfer_bad_rounds: int) -> "TransferSurrogateResult":
+def _no_transfer(baseline: Any, transfer_bad_rounds: int) -> TransferSurrogateResult:
     return TransferSurrogateResult(
         surrogate=baseline,
-        transfer_used_this_round=False,
-        transfer_weight_share=0.0,
-        transfer_mae_delta=None,
         transfer_bad_rounds=transfer_bad_rounds,
-        transfer_disabled=False,
-        transfer_disabled_reason=None,
     )
 
 
@@ -388,7 +384,6 @@ def _finalize_transfer_trust(
         share = 0.0 if zero_share_when_disabled else transfer_weight_share
         return TransferSurrogateResult(
             surrogate=fit_baseline(),
-            transfer_used_this_round=False,
             transfer_weight_share=share,
             transfer_mae_delta=mae_delta,
             transfer_bad_rounds=bad_rounds,
@@ -402,12 +397,9 @@ def _finalize_transfer_trust(
     if transfer_model is None:
         return TransferSurrogateResult(
             surrogate=fit_baseline(),
-            transfer_used_this_round=False,
             transfer_weight_share=transfer_weight_share,
             transfer_mae_delta=mae_delta,
             transfer_bad_rounds=bad_rounds,
-            transfer_disabled=False,
-            transfer_disabled_reason=None,
         )
     return TransferSurrogateResult(
         surrogate=transfer_model,
@@ -415,8 +407,202 @@ def _finalize_transfer_trust(
         transfer_weight_share=transfer_weight_share,
         transfer_mae_delta=mae_delta,
         transfer_bad_rounds=bad_rounds,
-        transfer_disabled=False,
-        transfer_disabled_reason=None,
+    )
+
+
+_TransferWeightBuilder = Callable[
+    [pd.DataFrame, np.ndarray, pd.DataFrame, np.ndarray],
+    tuple[pd.DataFrame, np.ndarray, np.ndarray, float] | None,
+]
+
+
+def _similarity_transfer_weights(
+    X_prior: pd.DataFrame,
+    y_prior: np.ndarray,
+    X_current: pd.DataFrame,
+    _y_current: np.ndarray,
+    *,
+    similarity_lengthscale: float,
+    min_similarity: float,
+    weight_cap: float,
+    prior_step_ages: list[int] | None,
+    recency_lengthscale: float | None,
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, float] | None:
+    """Similarity-gate prior rows, then build capped recency-modulated weights."""
+    recency_ls = (
+        float(similarity_lengthscale)
+        if recency_lengthscale is None
+        else float(recency_lengthscale)
+    )
+    step_ages_arr: np.ndarray | None = (
+        None if prior_step_ages is None else np.asarray(prior_step_ages, dtype=int)
+    )
+    similarity = prior_similarity_to_current(
+        X_prior,
+        X_current,
+        lengthscale=float(similarity_lengthscale),
+    )
+    mask = similarity >= min_similarity
+    if step_ages_arr is not None and len(step_ages_arr) == len(mask):
+        step_ages_arr = step_ages_arr[mask]
+    # Use positional indexing for every filtered array so features, targets,
+    # and metadata stay aligned. `X_prev` can carry a non-default index (e.g.
+    # after reindex/concat), so `.iloc`/`np.asarray` is required instead of
+    # `.loc[mask]`, which would align by label and silently desync rows.
+    keep = np.flatnonzero(mask)
+    X_prior = X_prior.iloc[keep].reset_index(drop=True)
+    y_prior = y_prior[keep]
+    similarity = similarity[keep]
+
+    if len(X_prior) == 0:
+        return None
+
+    recency = (
+        prior_recency_weights(step_ages_arr, lengthscale=recency_ls)
+        if step_ages_arr is not None and len(step_ages_arr) == len(X_prior)
+        else np.ones(len(X_prior), dtype=float)
+    )
+    if float(np.sum(recency)) <= 0.0:
+        return None
+
+    n_current = len(X_current)
+    transfer_weights = _capped_prior_weights(
+        similarity * recency, n_current=n_current, weight_cap=weight_cap
+    )
+    transfer_weight_share = float(
+        np.sum(transfer_weights) / (np.sum(transfer_weights) + float(n_current))
+    )
+    return X_prior, y_prior, transfer_weights, transfer_weight_share
+
+
+def _cumulative_refit_weights(
+    X_prior: pd.DataFrame,
+    y_prior: np.ndarray,
+    X_current: pd.DataFrame,
+    y_current: np.ndarray,
+    *,
+    weight_cap: float,
+    proximity_lengthscale: float,
+    proximity_floor: float,
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, float]:
+    """Proximity-weight the cumulative prior+current training set."""
+    _, _, refit_weights = cumulative_refit_training_set(
+        X_prior,
+        y_prior,
+        X_current,
+        y_current,
+        weight_cap=weight_cap,
+        proximity_lengthscale=proximity_lengthscale,
+        proximity_floor=proximity_floor,
+    )
+    n_prior = len(X_prior)
+    prior_weights = np.asarray(refit_weights[:n_prior], dtype=float)
+    prior_weight_sum = float(np.sum(prior_weights))
+    total_weight_sum = float(np.sum(refit_weights))
+    transfer_weight_share = (
+        prior_weight_sum / total_weight_sum if total_weight_sum > 0.0 else 0.0
+    )
+    return X_prior, y_prior, prior_weights, transfer_weight_share
+
+
+def _run_transfer_round(
+    X_current: pd.DataFrame,
+    y_current: np.ndarray,
+    observed_X_prev: pd.DataFrame | list[dict[str, float]],
+    observed_y_prev: np.ndarray | list[float],
+    *,
+    surrogate: TransferCapableSurrogateType,
+    n_estimators: int,
+    random_state: int,
+    mae_tolerance: float,
+    transfer_bad_rounds: int,
+    trust_patience: int,
+    n_jobs: int,
+    build_transfer_weights: _TransferWeightBuilder,
+    zero_share_when_disabled: bool = False,
+    warn_on_column_mismatch: bool = True,
+    function_name: str,
+) -> TransferSurrogateResult:
+    """Validate, align, weight, gate, and finalize one transfer round.
+
+    *build_transfer_weights* returns ``(X_prior_used, y_prior_used, weights,
+    weight_share)``; ``None`` means the prior is unusable and the baseline is
+    returned unchanged.
+    """
+    if surrogate not in BO_TRANSFER_CAPABLE_SURROGATES:
+        raise ValueError(
+            f"{function_name} requires a transfer-capable surrogate "
+            f"(one of {BO_TRANSFER_CAPABLE_SURROGATES}); got {surrogate!r}"
+        )
+    y_current_arr = np.asarray(y_current, dtype=float)
+    # Full-data baseline is only needed for early exits, small-n gating, gate
+    # exceptions, or when transfer is rejected. Skip the eager fit when the
+    # OOF gate can decide without it (n_current >= 4).
+    baseline: Any | None = None
+
+    def _fit_baseline() -> Any:
+        nonlocal baseline
+        if baseline is None:
+            baseline = train_surrogate(
+                X_current,
+                y_current_arr,
+                surrogate=surrogate,
+                n_estimators=n_estimators,
+                random_state=random_state,
+                n_jobs=n_jobs,
+            )
+        return baseline
+
+    if len(observed_X_prev) == 0 or len(observed_y_prev) == 0:
+        return _no_transfer(_fit_baseline(), transfer_bad_rounds)
+
+    X_prev = (
+        pd.DataFrame(observed_X_prev)
+        if not isinstance(observed_X_prev, pd.DataFrame)
+        else observed_X_prev.copy()
+    )
+    y_prev = np.asarray(observed_y_prev, dtype=float)
+    if warn_on_column_mismatch:
+        raw_columns = set(X_prev.columns)
+    X_prev = _align_to_columns(X_prev, X_current)
+    if warn_on_column_mismatch:
+        current_columns = set(X_current.columns)
+        if raw_columns != current_columns:
+            logger.warning(
+                "Transfer surrogate: prior feature columns {%s} differ from current {%s}; "
+                "missing columns zero-padded",
+                ", ".join(sorted(raw_columns - current_columns)),
+                ", ".join(sorted(current_columns - raw_columns)),
+            )
+
+    weighted = build_transfer_weights(X_prev, y_prev, X_current, y_current_arr)
+    if weighted is None:
+        return _no_transfer(_fit_baseline(), transfer_bad_rounds)
+    X_prev, y_prev, transfer_weights, transfer_weight_share = weighted
+
+    base_mae, transfer_mae, transfer_model, gate_out_of_sample = _transfer_trust_gate(
+        X_current,
+        y_current_arr,
+        X_prev,
+        y_prev,
+        transfer_weights,
+        fit_baseline=_fit_baseline,
+        surrogate=surrogate,
+        n_estimators=n_estimators,
+        random_state=random_state,
+        mae_tolerance=mae_tolerance,
+        n_jobs=n_jobs,
+    )
+    return _finalize_transfer_trust(
+        fit_baseline=_fit_baseline,
+        transfer_model=transfer_model,
+        transfer_weight_share=transfer_weight_share,
+        mae_delta=transfer_mae - base_mae,
+        mae_tolerance=mae_tolerance,
+        transfer_bad_rounds=transfer_bad_rounds,
+        trust_patience=trust_patience,
+        gate_out_of_sample=gate_out_of_sample,
+        zero_share_when_disabled=zero_share_when_disabled,
     )
 
 
@@ -482,118 +668,30 @@ def build_transfer_surrogate(
     n_jobs
         CPU workers forwarded to every surrogate fit (joblib convention).
     """
-    if surrogate not in BO_TRANSFER_CAPABLE_SURROGATES:
-        raise ValueError(
-            "build_transfer_surrogate requires a transfer-capable surrogate "
-            f"(one of {BO_TRANSFER_CAPABLE_SURROGATES}); got {surrogate!r}"
-        )
-    y_current = np.asarray(y_current, dtype=float)
-    # Full-data baseline is only needed for early exits, small-n gating, gate
-    # exceptions, or when transfer is rejected. Skip the eager fit when the
-    # OOF gate can decide without it (n_current >= 4).
-    baseline: Any | None = None
-
-    def _fit_baseline() -> Any:
-        nonlocal baseline
-        if baseline is None:
-            baseline = train_surrogate(
-                X_current,
-                y_current,
-                surrogate=surrogate,
-                n_estimators=n_estimators,
-                random_state=random_state,
-                n_jobs=n_jobs,
-            )
-        return baseline
-
-    if len(observed_X_prev) == 0 or len(observed_y_prev) == 0:
-        return _no_transfer(_fit_baseline(), transfer_bad_rounds)
-
-    X_prev = (
-        pd.DataFrame(observed_X_prev)
-        if not isinstance(observed_X_prev, pd.DataFrame)
-        else observed_X_prev.copy()
-    )
-    y_prev = np.asarray(observed_y_prev, dtype=float)
-    _X_prev_raw_columns = set(X_prev.columns)
-    X_prev = _align_to_columns(X_prev, X_current)
-    _X_current_columns = set(X_current.columns)
-    if _X_prev_raw_columns != _X_current_columns:
-        logger.warning(
-            "Transfer surrogate: prior feature columns {%s} differ from current {%s}; "
-            "missing columns zero-padded",
-            ", ".join(sorted(_X_prev_raw_columns - _X_current_columns)),
-            ", ".join(sorted(_X_current_columns - _X_prev_raw_columns)),
-        )
     # proximity_lengthscale is accepted for API stability; similarity gates rows.
     _ = proximity_lengthscale
-    recency_ls = (
-        float(similarity_lengthscale)
-        if recency_lengthscale is None
-        else float(recency_lengthscale)
+    weight_builder = partial(
+        _similarity_transfer_weights,
+        similarity_lengthscale=similarity_lengthscale,
+        min_similarity=min_similarity,
+        weight_cap=weight_cap,
+        prior_step_ages=prior_step_ages,
+        recency_lengthscale=recency_lengthscale,
     )
-    step_ages_arr: np.ndarray | None = (
-        None if prior_step_ages is None else np.asarray(prior_step_ages, dtype=int)
-    )
-    similarity = prior_similarity_to_current(
-        X_prev,
-        X_current,
-        lengthscale=float(similarity_lengthscale),
-    )
-    mask = similarity >= min_similarity
-    if step_ages_arr is not None and len(step_ages_arr) == len(mask):
-        step_ages_arr = step_ages_arr[mask]
-    # Use positional indexing for every filtered array so features, targets,
-    # and metadata stay aligned. `X_prev` can carry a non-default index (e.g.
-    # after reindex/concat), so `.iloc`/`np.asarray` is required instead of
-    # `.loc[mask]`, which would align by label and silently desync rows.
-    keep = np.flatnonzero(mask)
-    X_prev = X_prev.iloc[keep].reset_index(drop=True)
-    y_prev = y_prev[keep]
-    similarity = similarity[keep]
-
-    if len(X_prev) == 0:
-        return _no_transfer(_fit_baseline(), transfer_bad_rounds)
-
-    recency = (
-        prior_recency_weights(step_ages_arr, lengthscale=recency_ls)
-        if step_ages_arr is not None and len(step_ages_arr) == len(X_prev)
-        else np.ones(len(X_prev), dtype=float)
-    )
-    modifiers = recency
-    if float(np.sum(modifiers)) <= 0.0:
-        return _no_transfer(_fit_baseline(), transfer_bad_rounds)
-
-    n_current = len(X_current)
-    transfer_weights = _capped_prior_weights(
-        similarity * modifiers, n_current=n_current, weight_cap=weight_cap
-    )
-    transfer_weight_share = float(
-        np.sum(transfer_weights) / (np.sum(transfer_weights) + float(n_current))
-    )
-
-    base_mae, transfer_mae, transfer_model, gate_out_of_sample = _transfer_trust_gate(
+    return _run_transfer_round(
         X_current,
         y_current,
-        X_prev,
-        y_prev,
-        transfer_weights,
-        fit_baseline=_fit_baseline,
+        observed_X_prev,
+        observed_y_prev,
         surrogate=surrogate,
         n_estimators=n_estimators,
         random_state=random_state,
         mae_tolerance=mae_tolerance,
-        n_jobs=n_jobs,
-    )
-    return _finalize_transfer_trust(
-        fit_baseline=_fit_baseline,
-        transfer_model=transfer_model,
-        transfer_weight_share=transfer_weight_share,
-        mae_delta=transfer_mae - base_mae,
-        mae_tolerance=mae_tolerance,
         transfer_bad_rounds=transfer_bad_rounds,
         trust_patience=trust_patience,
-        gate_out_of_sample=gate_out_of_sample,
+        n_jobs=n_jobs,
+        build_transfer_weights=weight_builder,
+        function_name="build_transfer_surrogate",
     )
 
 
@@ -619,77 +717,28 @@ def build_cumulative_refit_surrogate(
     Mirrors :func:`build_transfer_surrogate` but concatenates prior + current
     with proximity weights instead of similarity-gated prior rows.
     """
-    if surrogate not in BO_TRANSFER_CAPABLE_SURROGATES:
-        raise ValueError(
-            "build_cumulative_refit_surrogate requires a transfer-capable "
-            f"surrogate (one of {BO_TRANSFER_CAPABLE_SURROGATES}); got {surrogate!r}"
-        )
-    y_current_arr = np.asarray(y_current, dtype=float)
-    baseline: Any | None = None
-
-    def _fit_baseline() -> Any:
-        nonlocal baseline
-        if baseline is None:
-            baseline = train_surrogate(
-                X_current,
-                y_current_arr,
-                surrogate=surrogate,
-                n_estimators=n_estimators,
-                random_state=random_state,
-                n_jobs=n_jobs,
-            )
-        return baseline
-
-    if len(observed_X_prev) == 0 or len(observed_y_prev) == 0:
-        return _no_transfer(_fit_baseline(), transfer_bad_rounds)
-
-    X_prior = (
-        pd.DataFrame(observed_X_prev)
-        if not isinstance(observed_X_prev, pd.DataFrame)
-        else observed_X_prev.copy()
-    )
-    y_prior = np.asarray(observed_y_prev, dtype=float)
-    X_prior = _align_to_columns(X_prior, X_current)
-    _, _, refit_weights = cumulative_refit_training_set(
-        X_prior,
-        y_prior,
-        X_current,
-        y_current_arr,
+    weight_builder = partial(
+        _cumulative_refit_weights,
         weight_cap=weight_cap,
         proximity_lengthscale=proximity_lengthscale,
         proximity_floor=proximity_floor,
     )
-    n_prior = len(X_prior)
-    prior_weights = np.asarray(refit_weights[:n_prior], dtype=float)
-    prior_weight_sum = float(np.sum(prior_weights))
-    total_weight_sum = float(np.sum(refit_weights))
-    transfer_weight_share = (
-        prior_weight_sum / total_weight_sum if total_weight_sum > 0.0 else 0.0
-    )
-
-    base_mae, transfer_mae, transfer_model, gate_out_of_sample = _transfer_trust_gate(
+    result = _run_transfer_round(
         X_current,
-        y_current_arr,
-        X_prior,
-        y_prior,
-        prior_weights,
-        fit_baseline=_fit_baseline,
+        y_current,
+        observed_X_prev,
+        observed_y_prev,
         surrogate=surrogate,
         n_estimators=n_estimators,
         random_state=random_state,
         mae_tolerance=mae_tolerance,
-        n_jobs=n_jobs,
-    )
-    result = _finalize_transfer_trust(
-        fit_baseline=_fit_baseline,
-        transfer_model=transfer_model,
-        transfer_weight_share=transfer_weight_share,
-        mae_delta=transfer_mae - base_mae,
-        mae_tolerance=mae_tolerance,
         transfer_bad_rounds=transfer_bad_rounds,
         trust_patience=trust_patience,
-        gate_out_of_sample=gate_out_of_sample,
+        n_jobs=n_jobs,
+        build_transfer_weights=weight_builder,
         zero_share_when_disabled=True,
+        warn_on_column_mismatch=False,
+        function_name="build_cumulative_refit_surrogate",
     )
     if result.transfer_disabled:
         logger.warning(

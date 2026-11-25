@@ -8,12 +8,12 @@ import numpy as np
 from scipy.spatial import KDTree
 
 from .._constants import _ATOP_INJECTION_HEIGHT_FACTOR
+from ..site_coords import median_nn_or_fallback
 from ..site_np import _generate_nanoparticle_topology_sites
 from .base import SiteCandidateBatch, SiteGenerationContext
 from .helpers import (
     candidate_enrichment_frames,
     inject_atop_sites,
-    median_nn_or_fallback,
 )
 
 

@@ -59,6 +59,7 @@ from ._constants import (
     _PORE_THRESHOLD_COVALENT_SCALE,
     _PORE_THRESHOLD_MIN_ANGSTROM,
     _STEP_TERRACE_MAX_GAP_ANGSTROM,
+    _SURFACE_COVALENT_RADIUS_FALLBACK,
     _SURFACE_NORMAL_FALLBACK_NORM_EPS,
     _TOP_LAYER_DEPTH_COVALENT_SCALE,
     _TOP_LAYER_DEPTH_MAX_ANGSTROM,
@@ -93,11 +94,15 @@ __all__ = [
     "_keep_mask_from_clusters",
     "_mean_covalent_radius",
     "_pbc_merge_pair_set",
+    "_pbc_pair_min_distances",
     "_periodic_image_offsets",
     "_union_find_cluster",
     "_wrapped_slab_fractional",
     "derive_pore_threshold",
+    "median_nn_or_fallback",
+    "mic_nn_distances",
     "mic_support_positions",
+    "periodic_accessibility_tree",
     "top_layer_mask_by_normal",
 ]
 
@@ -222,9 +227,142 @@ def _build_periodic_images(
     return np.vstack([positions + off for off in offsets])
 
 
+def mic_nn_distances(
+    points: np.ndarray,
+    cell: np.ndarray | None = None,
+    pbc: np.ndarray | None = None,
+    *,
+    margin: float | None = None,
+) -> np.ndarray:
+    """Nearest-neighbour distance per point under the minimum image convention.
+
+    Unresolved points carry ``inf`` rather than raising so callers can apply
+    their own fallback. Fewer than two points return an empty array.
+    """
+    pts = np.asarray(points, dtype=float).reshape(-1, 3)
+    n = len(pts)
+    if n < 2:
+        return np.empty(0, dtype=float)
+
+    pbc_arr = np.zeros(3, dtype=bool) if pbc is None else np.asarray(pbc, dtype=bool)
+    if cell is None:
+        offsets = [np.zeros(3, dtype=float)]
+    else:
+        cell_arr = np.asarray(cell, dtype=float)
+        if margin is None:
+            margin = (
+                float(np.max(np.linalg.norm(cell_arr[pbc_arr], axis=1)))
+                if np.any(pbc_arr)
+                else 0.0
+            )
+        offsets = _periodic_image_offsets(cell_arr, pbc_arr, float(margin))
+    ext = np.vstack([pts + off for off in offsets])
+    tree = KDTree(ext)
+    k = min(len(ext), len(offsets) + 1)
+    dists, idxs = tree.query(pts, k=k)
+    dists = np.atleast_2d(np.asarray(dists, dtype=float))
+    idxs = np.atleast_2d(np.asarray(idxs))
+    valid = (idxs % n) != np.arange(n)[:, None]
+    return np.where(valid, dists, np.inf).min(axis=1)
+
+
+def median_nn_or_fallback(
+    nn_dists: np.ndarray,
+    *,
+    reference_positions: np.ndarray | None = None,
+    cell: np.ndarray | None = None,
+    pbc: np.ndarray | None = None,
+) -> float:
+    """Median nearest-neighbour distance, or top-layer / covalent fallback.
+
+    An empty *nn_dists* (planar slabs that skip Voronoi) falls back to the
+    median MIC spacing of *reference_positions*.
+    """
+    if len(nn_dists) > 0:
+        return float(np.median(nn_dists))
+    if (
+        reference_positions is not None
+        and len(reference_positions) >= 2
+        and cell is not None
+        and pbc is not None
+    ):
+        pts = np.asarray(reference_positions, dtype=float)
+        pbc_arr = np.asarray(pbc, dtype=bool)
+        cell_arr = np.asarray(cell, dtype=float)
+        if cell_has_volume(cell_arr) and np.any(pbc_arr):
+            nn = mic_nn_distances(pts, cell_arr, pbc_arr)
+        else:
+            nn = mic_nn_distances(pts)
+        finite = nn[np.isfinite(nn)]
+        if len(finite) > 0:
+            return float(np.median(finite))
+    return _VORONOI_MAX_DISTANCE_COVALENT_SCALE * _SURFACE_COVALENT_RADIUS_FALLBACK
+
+
+def periodic_accessibility_tree(
+    positions: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    max_distance: float,
+) -> KDTree:
+    """KDTree over periodic images, for candidate-to-framework distance gating.
+
+    The image margin covers ``max_distance`` so boundary candidates that would
+    pass the accessibility window are still found.
+    """
+    if not np.any(pbc) or not cell_has_volume(cell):
+        return KDTree(positions)
+    margin = float(max_distance) + _VORONOI_DEDUP_TOLERANCE
+    return KDTree(_build_periodic_images(positions, cell, pbc, margin=margin))
+
+
 # ---------------------------------------------------------------------------
 # Deduplication helpers
 # ---------------------------------------------------------------------------
+
+
+def _pbc_pair_min_distances(
+    coords: np.ndarray,
+    radius: float,
+    *,
+    image_offsets: list[np.ndarray] | None = None,
+) -> dict[tuple[int, int], float]:
+    """Undirected origin pairs within *radius*, with their minimum image distance.
+
+    Expands *coords* by *image_offsets* when provided, queries a KD-tree, and
+    maps expanded indices back with ``% n``. Each pair keeps the shortest
+    expanded-image distance.
+    """
+    pts = np.asarray(coords, dtype=float)
+    n = len(pts)
+    if n < 2:
+        return {}
+    all_pts = np.vstack([pts + off for off in image_offsets]) if image_offsets else pts
+    tree = KDTree(all_pts)
+    raw_pairs = tree.query_pairs(r=float(radius), output_type="ndarray")
+    if len(raw_pairs) == 0:
+        return {}
+    origin_a = raw_pairs[:, 0] % n
+    origin_b = raw_pairs[:, 1] % n
+    keep = origin_a != origin_b
+    if not np.any(keep):
+        return {}
+    origin_a = origin_a[keep]
+    origin_b = origin_b[keep]
+    lo = np.minimum(origin_a, origin_b)
+    hi = np.maximum(origin_a, origin_b)
+    dist = np.linalg.norm(
+        all_pts[raw_pairs[keep, 0]] - all_pts[raw_pairs[keep, 1]], axis=1
+    )
+    # Per-key minimum without an n×n buffer: sort by (key, distance) and take
+    # the first entry of each run of equal keys.
+    flat_key = lo.astype(np.int64) * n + hi.astype(np.int64)
+    order = np.lexsort((dist, flat_key))
+    flat_sorted = flat_key[order]
+    first = np.ones(len(flat_sorted), dtype=bool)
+    first[1:] = flat_sorted[1:] != flat_sorted[:-1]
+    sel = order[first]
+    return {(int(lo[s]), int(hi[s])): float(dist[s]) for s in sel}
 
 
 def _pbc_merge_pair_set(
@@ -240,19 +378,7 @@ def _pbc_merge_pair_set(
     expanded indices back with ``% n``, and returns each undirected origin pair
     once.
     """
-    pts = np.asarray(coords, dtype=float)
-    n = len(pts)
-    all_pts = np.vstack([pts + off for off in image_offsets]) if image_offsets else pts
-    tree = KDTree(all_pts)
-    raw_pairs = tree.query_pairs(r=float(radius), output_type="ndarray")
-    merge_set: set[tuple[int, int]] = set()
-    for a_exp, b_exp in raw_pairs:
-        a = int(a_exp) % n
-        b = int(b_exp) % n
-        if a == b:
-            continue
-        merge_set.add((min(a, b), max(a, b)))
-    return merge_set
+    return set(_pbc_pair_min_distances(coords, radius, image_offsets=image_offsets))
 
 
 def _keep_mask_from_clusters(n: int, pairs: set[tuple[int, int]]) -> np.ndarray:

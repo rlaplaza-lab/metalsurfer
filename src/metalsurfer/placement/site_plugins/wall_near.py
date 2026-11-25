@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..site_coords import project_vertices_to_support_plane
+from ..site_coords import median_nn_or_fallback, project_vertices_to_support_plane
 from ..site_wall_near_common import AdaptiveGridResult
 from .base import SiteCandidateBatch, empty_candidate_batch
-from .helpers import median_nn_or_fallback
 
 
 def wall_near_batch_to_plugin(

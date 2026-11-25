@@ -51,6 +51,131 @@ def _repeat_seeds(run, tmp_path, *seeds):
         return [run(seed, results_dir) for seed in seeds]
 
 
+class _ModifierTestBase:
+    """Shared contract for alloy substitution and adatom deposition tests.
+
+    Subclasses supply the production-function invocation plus the comparison
+    semantics that genuinely differ between the two modifiers.
+    """
+
+    _FRACTION_KWARG: str
+    _DEFAULT_FRACTION = 0.0
+    _OUTPUT_FRACTION = 0.5
+    _PLAIN_FRACTION = 0.0
+    _SAME_SEED = 123
+    _OUTPUT_XYZ = ""
+    _OUTPUT_POSCAR = ""
+
+    def _make_substrate(self):
+        raise NotImplementedError
+
+    def _run(
+        self,
+        substrate,
+        *,
+        fraction=None,
+        seed=None,
+        config=None,
+        results_dir=None,
+        **kwargs,
+    ):
+        raise NotImplementedError
+
+    def _default_config(self):
+        return AdsorptionConfig()
+
+    def _seeded_config(self, seed):
+        return AdsorptionConfig(seed=seed)
+
+    def _vasp_config(self):
+        return AdsorptionConfig(write_vasp_inputs=True)
+
+    def _seeded_run(self, seed, results_dir):
+        return self._run(
+            self._make_substrate(),
+            seed=seed,
+            config=self._default_config(),
+            results_dir=results_dir,
+        )
+
+    def _assert_equivalent(self, r1, r2):
+        raise NotImplementedError
+
+    def _assert_different(self, r1, r2):
+        raise NotImplementedError
+
+    def _assert_plain_atoms_result(self, result, n_before):
+        raise NotImplementedError
+
+    def test_deterministic_with_same_seed(self, tmp_path):
+        r1, r2 = _repeat_seeds(
+            self._seeded_run, tmp_path, self._SAME_SEED, self._SAME_SEED
+        )
+        self._assert_equivalent(r1, r2)
+
+    def test_different_seed_differs(self, tmp_path):
+        r1, r2 = _repeat_seeds(self._seeded_run, tmp_path, 1, 999)
+        self._assert_different(r1, r2)
+
+    def test_uses_config_seed_by_default(self, tmp_path):
+        slab1 = self._make_substrate()
+        slab2 = self._make_substrate()
+        cfg = self._seeded_config(77)
+        with _scratch(tmp_path) as tmpdir:
+            r1 = self._run(slab1, config=cfg, results_dir=tmpdir)
+            r2 = self._run(
+                slab2, seed=77, config=self._default_config(), results_dir=tmpdir
+            )
+        self._assert_equivalent(r1, r2)
+
+    def test_writes_output_files(self, tmp_path):
+        slab = self._make_substrate()
+        with _scratch(tmp_path) as tmpdir:
+            self._run(
+                slab,
+                fraction=self._OUTPUT_FRACTION,
+                config=self._default_config(),
+                results_dir=tmpdir,
+            )
+            assert os.path.exists(os.path.join(tmpdir, self._OUTPUT_XYZ))
+            assert not os.path.exists(os.path.join(tmpdir, self._OUTPUT_POSCAR))
+
+    def test_writes_poscar_when_enabled(self, tmp_path):
+        slab = self._make_substrate()
+        with _scratch(tmp_path) as tmpdir:
+            self._run(
+                slab,
+                fraction=self._OUTPUT_FRACTION,
+                config=self._vasp_config(),
+                results_dir=tmpdir,
+            )
+            assert os.path.exists(os.path.join(tmpdir, self._OUTPUT_POSCAR))
+
+    @pytest.mark.parametrize("bad_fraction", [-0.1, 1.01, -1.0, 2.0])
+    def test_out_of_range_fraction_raises(self, bad_fraction):
+        slab = self._make_substrate()
+        with pytest.raises(
+            ValueError,
+            match=f"{self._FRACTION_KWARG} must be between 0 and 1",
+        ):
+            self._run(slab, fraction=bad_fraction, config=AdsorptionConfig())
+
+    def test_accepts_plain_atoms_input(self, tmp_path):
+        atoms = self._make_substrate().atoms
+        n_before = len(atoms)
+        with _scratch(tmp_path) as tmpdir:
+            result = self._run(
+                atoms,
+                fraction=self._PLAIN_FRACTION,
+                seed=42,
+                config=self._default_config(),
+                results_dir=tmpdir,
+                material_type="slab",
+            )
+        assert isinstance(result, Substrate)
+        self._assert_plain_atoms_result(result, n_before)
+
+
 # ---------------------------------------------------------------------------
 # Substrate
 # ---------------------------------------------------------------------------
@@ -81,10 +206,6 @@ class TestSlabZAlignment:
         c_len = float(np.linalg.norm(aligned.get_cell()[2]))
         assert z_min == pytest.approx(0.0)
         assert c_len >= max(18.0, z_max + DEFAULT_SLAB_TOP_VACUUM_ANG)
-        # Explicit clear-vacuum gap: at least 12 Å of vacuum above the topmost
-        # atom (DEFAULT_SLAB_TOP_VACUUM_ANG is already 15 Å, so this is a
-        # defensive bound, not a behavioural change).
-        assert c_len - z_max >= 12.0
 
     def test_coerce_substrate_is_pure_wrap(self):
         centered = fcc111("Al", size=(2, 2, 2), vacuum=7.0)
@@ -105,9 +226,7 @@ class TestSlabZAlignment:
     def test_create_slab_from_atoms_skips_alignment_when_disabled(self):
         centered = fcc111("Al", size=(2, 2, 2), vacuum=7.0)
         z_min_before = float(np.min(centered.get_positions()[:, 2]))
-        container = create_slab_from_atoms(
-            centered, material_type="nanoparticle", align=False
-        )
+        container = create_slab_from_atoms(centered, material_type="slab", align=False)
         assert float(np.min(container.atoms.get_positions()[:, 2])) == pytest.approx(
             z_min_before
         )
@@ -296,12 +415,50 @@ class TestSlabZAlignment:
 # ---------------------------------------------------------------------------
 
 
-class TestSubstituteAlloy:
-    def _ru_slab(self):
+class TestSubstituteAlloy(_ModifierTestBase):
+    _FRACTION_KWARG = "guest_fraction"
+    _DEFAULT_FRACTION = 0.33
+    _OUTPUT_FRACTION = 0.5
+    _PLAIN_FRACTION = 0.25
+    _SAME_SEED = 123
+    _OUTPUT_XYZ = "clean_Ru_Cu_50_slab.xyz"
+    _OUTPUT_POSCAR = "clean_Ru_Cu_50_slab_POSCAR"
+
+    def _make_substrate(self):
         return Substrate(make_slab(symbol="Ru"), material_type="slab")
 
+    def _run(
+        self,
+        substrate,
+        *,
+        fraction=None,
+        seed=None,
+        config=None,
+        results_dir=None,
+        **kwargs,
+    ):
+        return substitute_alloy(
+            substrate,
+            "Ru",
+            "Cu",
+            guest_fraction=self._DEFAULT_FRACTION if fraction is None else fraction,
+            seed=seed,
+            config=config,
+            results_dir=results_dir,
+            **kwargs,
+        )
+
+    def _assert_equivalent(self, r1, r2):
+        assert r1.atoms.get_chemical_symbols() == r2.atoms.get_chemical_symbols()
+
+    def _assert_different(self, r1, r2):
+        assert r1.atoms.get_chemical_symbols() != r2.atoms.get_chemical_symbols()
+
+    def _assert_plain_atoms_result(self, result, _n_before):
+        assert result.atoms.get_chemical_symbols().count("Cu") > 0
+
     def test_zero_fraction_returns_base(self, tmp_path):
-        slab = self._ru_slab()
+        slab = self._make_substrate()
         with _scratch(tmp_path) as tmpdir:
             result = substitute_alloy(
                 slab,
@@ -315,7 +472,7 @@ class TestSubstituteAlloy:
         assert all(s == "Ru" for s in syms)
 
     def test_full_replacement(self, tmp_path):
-        slab = self._ru_slab()
+        slab = self._make_substrate()
         with _scratch(tmp_path) as tmpdir:
             result = substitute_alloy(
                 slab,
@@ -329,7 +486,7 @@ class TestSubstituteAlloy:
         assert all(s == "Cu" for s in syms)
 
     def test_partial_replacement_count(self, tmp_path):
-        slab = self._ru_slab()
+        slab = self._make_substrate()
         n_total = len(slab.atoms)
         with _scratch(tmp_path) as tmpdir:
             result = substitute_alloy(
@@ -344,74 +501,6 @@ class TestSubstituteAlloy:
         n_cu = syms.count("Cu")
         expected = int(round(n_total * 0.25))
         assert n_cu == expected
-
-    def _alloy(self, seed, results_dir):
-        return substitute_alloy(
-            self._ru_slab(),
-            "Ru",
-            "Cu",
-            guest_fraction=0.33,
-            seed=seed,
-            results_dir=results_dir,
-            config=AdsorptionConfig(),
-        )
-
-    def test_deterministic_with_same_seed(self, tmp_path):
-        r1, r2 = _repeat_seeds(self._alloy, tmp_path, 123, 123)
-        assert r1.atoms.get_chemical_symbols() == r2.atoms.get_chemical_symbols()
-
-    def test_different_seed_differs(self, tmp_path):
-        r1, r2 = _repeat_seeds(self._alloy, tmp_path, 1, 999)
-        assert r1.atoms.get_chemical_symbols() != r2.atoms.get_chemical_symbols()
-
-    def test_uses_config_seed_by_default(self, tmp_path):
-        slab1 = self._ru_slab()
-        slab2 = self._ru_slab()
-        cfg = AdsorptionConfig(seed=77)
-        with _scratch(tmp_path) as tmpdir:
-            r1 = substitute_alloy(
-                slab1, "Ru", "Cu", guest_fraction=0.33, config=cfg, results_dir=tmpdir
-            )
-            r2 = substitute_alloy(
-                slab2,
-                "Ru",
-                "Cu",
-                guest_fraction=0.33,
-                seed=77,
-                results_dir=tmpdir,
-                config=AdsorptionConfig(),
-            )
-        assert r1.atoms.get_chemical_symbols() == r2.atoms.get_chemical_symbols()
-
-    def test_writes_output_files(self, tmp_path):
-        slab = self._ru_slab()
-        with _scratch(tmp_path) as tmpdir:
-            substitute_alloy(
-                slab,
-                "Ru",
-                "Cu",
-                guest_fraction=0.5,
-                results_dir=tmpdir,
-                config=AdsorptionConfig(),
-            )
-            assert os.path.exists(os.path.join(tmpdir, "clean_Ru_Cu_50_slab.xyz"))
-            assert not os.path.exists(
-                os.path.join(tmpdir, "clean_Ru_Cu_50_slab_POSCAR")
-            )
-
-    def test_writes_poscar_when_enabled(self, tmp_path):
-        slab = self._ru_slab()
-        cfg = AdsorptionConfig(write_vasp_inputs=True)
-        with _scratch(tmp_path) as tmpdir:
-            substitute_alloy(
-                slab,
-                "Ru",
-                "Cu",
-                guest_fraction=0.5,
-                config=cfg,
-                results_dir=tmpdir,
-            )
-            assert os.path.exists(os.path.join(tmpdir, "clean_Ru_Cu_50_slab_POSCAR"))
 
     def test_no_host_atoms_raises(self, tmp_path):
         slab = Substrate(make_slab(symbol="Cu"), material_type="slab")
@@ -428,38 +517,10 @@ class TestSubstituteAlloy:
             # guest_fraction of 0 host atoms = 0 replacements → returns base
             assert all(s == "Cu" for s in result.atoms.get_chemical_symbols())
 
-    @pytest.mark.parametrize("bad_fraction", [-0.1, 1.01, -1.0, 2.0])
-    def test_out_of_range_fraction_raises(self, bad_fraction):
-        slab = self._ru_slab()
-        with pytest.raises(ValueError, match="guest_fraction must be between 0 and 1"):
-            substitute_alloy(
-                slab,
-                "Ru",
-                "Cu",
-                guest_fraction=bad_fraction,
-                config=AdsorptionConfig(),
-            )
-
-    def test_accepts_plain_atoms_input(self, tmp_path):
-        atoms = make_slab(symbol="Ru")
-        with _scratch(tmp_path) as tmpdir:
-            result = substitute_alloy(
-                atoms,
-                "Ru",
-                "Cu",
-                guest_fraction=0.25,
-                seed=42,
-                results_dir=tmpdir,
-                material_type="slab",
-                config=AdsorptionConfig(),
-            )
-        assert isinstance(result, Substrate)
-        assert result.atoms.get_chemical_symbols().count("Cu") > 0
-
     def test_propagates_optimization_error_without_rewrapping(
         self, monkeypatch, tmp_path
     ):
-        slab = self._ru_slab()
+        slab = self._make_substrate()
 
         def _failing_relax(*_args, **_kwargs):
             raise OptimizationError("inner relax boom")
@@ -491,7 +552,7 @@ class TestSubstituteAlloy:
             )
 
     def test_wraps_non_optimization_runtime_error(self, monkeypatch, tmp_path):
-        slab = self._ru_slab()
+        slab = self._make_substrate()
 
         class _PostRelaxBrokenCalculator:
             def get_potential_energy(self, atoms=None, force_consistent=False):
@@ -536,7 +597,7 @@ class TestSubstituteAlloy:
             )
 
     def test_ranking_preserves_batch_failure_cause(self, monkeypatch, tmp_path):
-        slab = self._ru_slab()
+        slab = self._make_substrate()
         batch_err = RuntimeError("batch OOM")
 
         class _AlwaysFailCalc:
@@ -573,7 +634,7 @@ class TestSubstituteAlloy:
     def test_ranking_falls_through_when_batch_energies_invalid(
         self, monkeypatch, tmp_path
     ):
-        slab = self._ru_slab()
+        slab = self._make_substrate()
 
         class _GoodCalc:
             def get_potential_energy(self, atoms=None, force_consistent=False):
@@ -673,14 +734,68 @@ def test_relax_slab_structure_propagates_dependency_missing():
 # ---------------------------------------------------------------------------
 
 
-class TestDepositAdatoms:
+class TestDepositAdatoms(_ModifierTestBase):
     _NO_RELAX_CFG = AdsorptionConfig(slab_relaxation_mode="none")
+    _FRACTION_KWARG = "coverage_fraction"
+    _DEFAULT_FRACTION = 0.3
+    _OUTPUT_FRACTION = 0.2
+    _PLAIN_FRACTION = 0.2
+    _SAME_SEED = 42
+    _OUTPUT_XYZ = "clean_slab_Sn20.xyz"
+    _OUTPUT_POSCAR = "clean_slab_Sn20_POSCAR"
 
-    def _layered_slab(self):
+    def _make_substrate(self):
         return Substrate(make_slab(nx=4, ny=4, n_layers=3), material_type="slab")
 
+    def _default_config(self):
+        return self._NO_RELAX_CFG
+
+    def _seeded_config(self, seed):
+        return AdsorptionConfig(seed=seed, slab_relaxation_mode="none")
+
+    def _vasp_config(self):
+        return AdsorptionConfig(write_vasp_inputs=True, slab_relaxation_mode="none")
+
+    def _run(
+        self,
+        substrate,
+        *,
+        fraction=None,
+        seed=None,
+        config=None,
+        results_dir=None,
+        **kwargs,
+    ):
+        return deposit_adatoms(
+            substrate,
+            "Sn",
+            coverage_fraction=self._DEFAULT_FRACTION if fraction is None else fraction,
+            seed=seed,
+            config=config,
+            results_dir=results_dir,
+            **kwargs,
+        )
+
+    def _assert_equivalent(self, r1, r2):
+        assert np.allclose(
+            r1.atoms.get_positions(), r2.atoms.get_positions(), atol=1e-10
+        )
+
+    def _assert_different(self, r1, r2):
+        n_sub = len(self._make_substrate().atoms)
+        ads1 = r1.atoms.get_positions()[n_sub:]
+        ads2 = r2.atoms.get_positions()[n_sub:]
+        # Adatom positions should differ across seeds (site selection is random).
+        # The adatom count can vary under the minimum-separation constraint, so
+        # only treat identical *positions* (same shape and coordinates) as a bug.
+        if ads1.shape == ads2.shape and np.allclose(ads1, ads2, atol=1e-6):
+            pytest.fail("different seeds produced identical adatom placements")
+
+    def _assert_plain_atoms_result(self, result, n_before):
+        assert len(result.atoms) > n_before
+
     def test_adatoms_placed_above_surface(self, tmp_path):
-        slab = self._layered_slab()
+        slab = self._make_substrate()
         z_max = float(np.max(slab.atoms.get_positions()[:, 2]))
         n_before = len(slab.atoms)
         with _scratch(tmp_path) as tmpdir:
@@ -696,7 +811,7 @@ class TestDepositAdatoms:
         assert all(z > z_max for z in new_positions[:, 2])
 
     def test_logs_without_energy_when_no_calculator(self, caplog, tmp_path):
-        slab = self._layered_slab()
+        slab = self._make_substrate()
         with (
             _scratch(tmp_path) as tmpdir,
             caplog.at_level(logging.INFO, logger="metalsurfer.surface_prep._surfaces"),
@@ -711,33 +826,6 @@ class TestDepositAdatoms:
         messages = [r.getMessage() for r in caplog.records]
         assert any("without energy ranking" in m for m in messages)
         assert not any("E=inf" in m for m in messages)
-
-    def _adatoms(self, seed, results_dir):
-        return deposit_adatoms(
-            self._layered_slab(),
-            "Sn",
-            coverage_fraction=0.3,
-            seed=seed,
-            config=self._NO_RELAX_CFG,
-            results_dir=results_dir,
-        )
-
-    def test_deterministic_with_same_seed(self, tmp_path):
-        r1, r2 = _repeat_seeds(self._adatoms, tmp_path, 42, 42)
-        assert np.allclose(
-            r1.atoms.get_positions(), r2.atoms.get_positions(), atol=1e-10
-        )
-
-    def test_different_seed_differs(self, tmp_path):
-        n_sub = len(self._layered_slab().atoms)
-        r1, r2 = _repeat_seeds(self._adatoms, tmp_path, 1, 999)
-        ads1 = r1.atoms.get_positions()[n_sub:]
-        ads2 = r2.atoms.get_positions()[n_sub:]
-        # Adatom positions should differ across seeds (site selection is random).
-        # The adatom count can vary under the minimum-separation constraint, so
-        # only treat identical *positions* (same shape and coordinates) as a bug.
-        if ads1.shape == ads2.shape and np.allclose(ads1, ads2, atol=1e-6):
-            pytest.fail("different seeds produced identical adatom placements")
 
     def test_too_few_top_atoms_raises(self, tmp_path):
         atoms = Atoms("H2", positions=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
@@ -758,67 +846,8 @@ class TestDepositAdatoms:
                 results_dir=tmpdir,
             )
 
-    def test_writes_output_files(self, tmp_path):
-        slab = self._layered_slab()
-        with _scratch(tmp_path) as tmpdir:
-            deposit_adatoms(
-                slab,
-                "Sn",
-                coverage_fraction=0.2,
-                config=self._NO_RELAX_CFG,
-                results_dir=tmpdir,
-            )
-            assert os.path.exists(os.path.join(tmpdir, "clean_slab_Sn20.xyz"))
-            assert not os.path.exists(os.path.join(tmpdir, "clean_slab_Sn20_POSCAR"))
-
-    def test_writes_poscar_when_enabled(self, tmp_path):
-        slab = self._layered_slab()
-        cfg = AdsorptionConfig(write_vasp_inputs=True, slab_relaxation_mode="none")
-        with _scratch(tmp_path) as tmpdir:
-            deposit_adatoms(
-                slab,
-                "Sn",
-                coverage_fraction=0.2,
-                config=cfg,
-                results_dir=tmpdir,
-            )
-            assert os.path.exists(os.path.join(tmpdir, "clean_slab_Sn20_POSCAR"))
-
-    def test_uses_config_seed_by_default(self, tmp_path):
-        slab1 = self._layered_slab()
-        slab2 = self._layered_slab()
-        cfg = AdsorptionConfig(seed=77, slab_relaxation_mode="none")
-        with _scratch(tmp_path) as tmpdir:
-            r1 = deposit_adatoms(
-                slab1, "Sn", coverage_fraction=0.3, config=cfg, results_dir=tmpdir
-            )
-            r2 = deposit_adatoms(
-                slab2,
-                "Sn",
-                coverage_fraction=0.3,
-                seed=77,
-                config=self._NO_RELAX_CFG,
-                results_dir=tmpdir,
-            )
-        assert np.allclose(
-            r1.atoms.get_positions(), r2.atoms.get_positions(), atol=1e-10
-        )
-
-    @pytest.mark.parametrize("bad_fraction", [-0.1, 1.01, -1.0, 2.0])
-    def test_out_of_range_coverage_raises(self, bad_fraction):
-        slab = self._layered_slab()
-        with pytest.raises(
-            ValueError, match="coverage_fraction must be between 0 and 1"
-        ):
-            deposit_adatoms(
-                slab,
-                "Sn",
-                coverage_fraction=bad_fraction,
-                config=AdsorptionConfig(),
-            )
-
     def test_zero_coverage_applies_constraints_without_adatoms(self):
-        slab = self._layered_slab()
+        slab = self._make_substrate()
         n_before = len(slab.atoms)
         syms_before = slab.atoms.get_chemical_symbols()
         result = deposit_adatoms(
@@ -866,24 +895,8 @@ class TestDepositAdatoms:
                 min_sep = min(min_sep, float(np.min(dmat[iu])))
         assert min_sep >= 2.0 * float(_get_covalent_radius("Sn")) - 1e-6
 
-    def test_accepts_plain_atoms_input(self, tmp_path):
-        slab = self._layered_slab()
-        n_before = len(slab.atoms)
-        with _scratch(tmp_path) as tmpdir:
-            result = deposit_adatoms(
-                slab.atoms,
-                "Sn",
-                coverage_fraction=0.2,
-                seed=42,
-                material_type="slab",
-                config=self._NO_RELAX_CFG,
-                results_dir=tmpdir,
-            )
-        assert isinstance(result, Substrate)
-        assert len(result.atoms) > n_before
-
     def test_relaxation_mode_requires_calculator(self):
-        slab = self._layered_slab()
+        slab = self._make_substrate()
         with pytest.raises(ValueError, match="requires a calculator"):
             deposit_adatoms(
                 slab,
@@ -894,7 +907,7 @@ class TestDepositAdatoms:
             )
 
     def test_relaxation_invoked_for_variants(self, monkeypatch, tmp_path):
-        slab = self._layered_slab()
+        slab = self._make_substrate()
 
         calls: list[tuple[str, int, int]] = []
 

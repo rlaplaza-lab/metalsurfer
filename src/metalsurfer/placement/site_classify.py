@@ -29,10 +29,10 @@ from .site_coords import (
     _project_to_slab_plane,
     _slab_normal,
     _slab_outward_normal,
+    median_nn_or_fallback,
     mic_support_positions,
     project_supported_anchor,
 )
-from .site_plugins.helpers import median_nn_or_fallback
 from .site_types import Site, site_kind_from_type_and_supports
 from .site_voronoi import (
     _classify_voronoi_site_from_neighbors,

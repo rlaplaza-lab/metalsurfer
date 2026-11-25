@@ -61,13 +61,48 @@ def _summarize_molecule(
     )
 
 
+CampaignState = dict[str, Any]
+
+
+def _write_campaign_run_settings(
+    surface_type: str,
+    config: AdsorptionConfig,
+    *,
+    campaign: str,
+    mode: Literal["bo", "non_bo"],
+    molecule_names: list[str],
+    n_configurations: int | None = None,
+) -> None:
+    """Write shared campaign fields for run settings."""
+    run_info: dict[str, Any] = {
+        "campaign": campaign,
+        "n_molecules": len(molecule_names),
+        "molecules": molecule_names,
+    }
+    if n_configurations is not None:
+        run_info["n_configurations"] = n_configurations
+    write_run_settings(surface_type, config, mode=mode, **run_info)
+
+
+def _run_campaign_lifecycle(
+    *,
+    surface_type: str,
+    config: AdsorptionConfig,
+    run: Callable[[], CampaignState],
+    build_result: Callable[[CampaignState], Any],
+) -> Any:
+    """Drive setup, execution, and result construction for a campaign."""
+    setup_directories([surface_type], write_vasp_inputs=config.write_vasp_inputs)
+    return build_result(run())
+
+
 def _run_binding_campaign(
     *,
     substrate: Substrate,
     molecules: list[tuple[str, str]] | str,
     config: AdsorptionConfig,
     surface_type: str,
-    mode: str,
+    mode: Literal["bo", "non_bo"],
     process_fn,
     system_name: str | None,
     save_results: bool,
@@ -87,10 +122,9 @@ def _run_binding_campaign(
         ).as_posix()
         msg = empty_molecule_input_message(load_status, listed_csv=listed_csv)
         if msg is not None:
-            logger.warning(msg)
             warnings.warn(msg, stacklevel=3)
         return BindingCampaignResult(
-            mode="bo" if mode == "bo" else "non_bo",
+            mode=mode,
             surface_type=surface_type,
             run_results=[],
             molecule_summaries=[],
@@ -101,98 +135,108 @@ def _run_binding_campaign(
             failure_summaries={},
         )
 
-    process_kwargs = process_kwargs or {}
+    if process_kwargs is None:
+        process_kwargs = {}
     t_start = time.perf_counter()
 
-    setup_directories([surface_type], write_vasp_inputs=config.write_vasp_inputs)
-    bootstrap = _bootstrap_screening_run(substrate, molecule_pairs, config)
-    calculator = bootstrap.calculator
-    ts_model = bootstrap.ts_model
-    substrate = bootstrap.slab
-    ref = bootstrap.ref
-    t_ref_s = bootstrap.t_ref_s
-    molecule_names = [name for _, name in molecule_pairs]
-
-    run_results = []
-    summaries = []
-    failure_summaries: dict[str, FailureSummary] = {}
-
-    for smiles, molecule_name in molecule_pairs:
-        outcome = process_fn(
-            smiles,
-            molecule_name,
-            substrate,
-            calculator,
-            ref,
-            ts_model=ts_model,
-            config=config,
-            surface_type=surface_type,
-            reference_smiles=smiles,
-            **process_kwargs,
-        )
-        results = outcome.results
-        if outcome.failure_summary:
-            failure_summaries[molecule_name] = outcome.failure_summary
-        summaries.append(_summarize_molecule(molecule_name, results))
-        if not results:
-            continue
-        if save_results:
-            save_single_molecule_results(
+    def _run() -> CampaignState:
+        bootstrap = _bootstrap_screening_run(substrate, molecule_pairs, config)
+        slab = bootstrap.slab
+        run_results = []
+        summaries = []
+        failure_summaries: dict[str, FailureSummary] = {}
+        for smiles, molecule_name in molecule_pairs:
+            outcome = process_fn(
+                smiles,
                 molecule_name,
-                results,
-                surface_type=surface_type,
-                system_name=system_name,
+                slab,
+                bootstrap.calculator,
+                bootstrap.ref,
+                ts_model=bootstrap.ts_model,
                 config=config,
-                material_type=substrate.material_type,
-                write_csv=False,
+                surface_type=surface_type,
+                reference_smiles=smiles,
+                **process_kwargs,
             )
-        run_results.append(screening_run_result(molecule_name, results))
+            results = outcome.results
+            if outcome.failure_summary:
+                failure_summaries[molecule_name] = outcome.failure_summary
+            summaries.append(_summarize_molecule(molecule_name, results))
+            if not results:
+                continue
+            if save_results:
+                save_single_molecule_results(
+                    molecule_name,
+                    results,
+                    surface_type=surface_type,
+                    system_name=system_name,
+                    config=config,
+                    material_type=slab.material_type,
+                    write_csv=False,
+                )
+            run_results.append(screening_run_result(molecule_name, results))
+        return {
+            "slab": slab,
+            "run_results": run_results,
+            "summaries": summaries,
+            "failure_summaries": failure_summaries,
+            "n_molecules": len(molecule_pairs),
+            "t_ref_s": bootstrap.t_ref_s,
+        }
 
-    if save_results and run_results:
-        save_summary_results(
-            run_results,
-            surface_type=surface_type,
-            config=config,
-            material_type=substrate.material_type,
-        )
-    total_configurations = sum(len(rr.results) for rr in run_results)
-    t_total_s = time.perf_counter() - t_start
-    if write_settings:
-        write_run_settings(
-            surface_type,
-            config,
-            campaign="multi_molecule_binding",
-            n_molecules=len(run_results),
-            molecules=[rr.molecule for rr in run_results],
-            n_configurations=total_configurations,
+    def _build_result(state: CampaignState) -> BindingCampaignResult:
+        run_results = state["run_results"]
+        if save_results and run_results:
+            save_summary_results(
+                run_results,
+                surface_type=surface_type,
+                config=config,
+                material_type=state["slab"].material_type,
+            )
+        total_configurations = sum(len(rr.results) for rr in run_results)
+        t_total_s = time.perf_counter() - t_start
+        if write_settings:
+            _write_campaign_run_settings(
+                surface_type,
+                config,
+                campaign="multi_molecule_binding",
+                mode=mode,
+                molecule_names=[rr.molecule for rr in run_results],
+                n_configurations=total_configurations,
+            )
+            write_run_metadata(
+                surface_type=surface_type,
+                config=config,
+                smiles_file=molecules_source,
+                n_molecules=state["n_molecules"],
+                total_configs=total_configurations,
+                t_ref_s=state["t_ref_s"],
+                t_total_s=t_total_s,
+            )
+        if run_metadata_out is not None:
+            run_metadata_out.update(
+                n_molecules=state["n_molecules"],
+                total_configs=total_configurations,
+                t_ref_s=state["t_ref_s"],
+                t_total_s=t_total_s,
+            )
+        return BindingCampaignResult(
             mode=mode,
-        )
-        write_run_metadata(
             surface_type=surface_type,
-            config=config,
-            smiles_file=molecules_source,
-            n_molecules=len(molecule_names),
-            total_configs=total_configurations,
-            t_ref_s=t_ref_s,
+            run_results=run_results,
+            molecule_summaries=state["summaries"],
+            total_configurations=total_configurations,
+            n_molecules=state["n_molecules"],
+            t_ref_s=state["t_ref_s"],
             t_total_s=t_total_s,
+            failure_summaries=state["failure_summaries"],
         )
-    if run_metadata_out is not None:
-        run_metadata_out.update(
-            n_molecules=len(molecule_names),
-            total_configs=total_configurations,
-            t_ref_s=t_ref_s,
-            t_total_s=t_total_s,
-        )
-    return BindingCampaignResult(
-        mode="bo" if mode == "bo" else "non_bo",
+
+    return _run_campaign_lifecycle(
         surface_type=surface_type,
-        run_results=run_results,
-        molecule_summaries=summaries,
-        total_configurations=total_configurations,
-        n_molecules=len(molecule_names),
-        t_ref_s=t_ref_s,
-        t_total_s=t_total_s,
-        failure_summaries=failure_summaries,
+        config=config,
+        run=_run,
+        build_result=_build_result,
     )
 
 
@@ -347,73 +391,82 @@ def _run_saturation_campaign(
     skip_existing: bool,
     run_metadata_out: dict[str, Any] | None,
 ) -> SaturationCampaignResult:
-    setup_directories([surface_type], write_vasp_inputs=config.write_vasp_inputs)
-    failure_summary: dict[str, FailureSummary] = {}
     run_metadata: dict[str, Any] = (
         run_metadata_out if run_metadata_out is not None else {}
     )
 
-    results = run_saturation_screening(
-        substrate=substrate,
-        molecules=molecules,
-        config=config,
-        surface_type=surface_type,
-        skip_existing=skip_existing,
-        failure_summary_out=failure_summary,
-        run_metadata_out=run_metadata,
-        bo_enabled=(mode == "bo"),
-    )
-    runs = cast(
-        list[SaturationRunResult | MultiMolSaturationRunResult],
-        list(results),
-    )
+    def _run() -> CampaignState:
+        failure_summary: dict[str, FailureSummary] = {}
+        results = run_saturation_screening(
+            substrate=substrate,
+            molecules=molecules,
+            config=config,
+            surface_type=surface_type,
+            skip_existing=skip_existing,
+            failure_summary_out=failure_summary,
+            run_metadata_out=run_metadata,
+            bo_enabled=(mode == "bo"),
+        )
+        runs = cast(
+            list[SaturationRunResult | MultiMolSaturationRunResult],
+            list(results),
+        )
+        return {"runs": runs, "failure_summary": failure_summary}
 
-    if save_results:
-        save_saturation_results(
-            runs,
-            surface_type=surface_type,
-            config=config,
-            material_type=substrate.material_type,
-        )
-        _save_benchmark_dataset_if_requested(
-            runs,
-            surface_type=surface_type,
-            config=config,
-            material_type=substrate.material_type,
-        )
-    if write_settings:
-        molecule_names = [
-            name
-            for run in runs
-            for name in (
-                run.molecules
-                if isinstance(run, MultiMolSaturationRunResult)
-                else [run.molecule]
-            )
-        ]
-        write_run_settings(
-            surface_type,
-            config,
-            campaign="saturation",
-            mode=mode,
-            n_molecules=len(molecule_names),
-            molecules=molecule_names,
-        )
-        if run_metadata:
-            write_run_metadata_from_out(
-                run_metadata,
+    def _build_result(state: CampaignState) -> SaturationCampaignResult:
+        runs = state["runs"]
+        if save_results:
+            save_saturation_results(
+                runs,
                 surface_type=surface_type,
                 config=config,
-                molecules=molecules,
+                material_type=substrate.material_type,
             )
+            _save_benchmark_dataset_if_requested(
+                runs,
+                surface_type=surface_type,
+                config=config,
+                material_type=substrate.material_type,
+            )
+        if write_settings:
+            molecule_names = [
+                name
+                for run in runs
+                for name in (
+                    run.molecules
+                    if isinstance(run, MultiMolSaturationRunResult)
+                    else [run.molecule]
+                )
+            ]
+            _write_campaign_run_settings(
+                surface_type,
+                config,
+                campaign="saturation",
+                mode=mode,
+                molecule_names=molecule_names,
+            )
+            if run_metadata:
+                write_run_metadata_from_out(
+                    run_metadata,
+                    surface_type=surface_type,
+                    config=config,
+                    molecules=molecules,
+                )
 
-    return SaturationCampaignResult(
-        mode=mode,
+        return SaturationCampaignResult(
+            mode=mode,
+            surface_type=surface_type,
+            runs=runs,
+            failure_summary=state["failure_summary"],
+            t_ref_s=float(run_metadata.get("t_ref_s", 0.0)),
+            t_total_s=float(run_metadata.get("t_total_s", 0.0)),
+        )
+
+    return _run_campaign_lifecycle(
         surface_type=surface_type,
-        runs=runs,
-        failure_summary=failure_summary,
-        t_ref_s=float(run_metadata.get("t_ref_s", 0.0)),
-        t_total_s=float(run_metadata.get("t_total_s", 0.0)),
+        config=config,
+        run=_run,
+        build_result=_build_result,
     )
 
 

@@ -286,10 +286,6 @@ def _distance_window(material_type: str) -> tuple[float, float]:
     return MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM, 4.0
 
 
-def _assert_no_intramolecular_clashes(adsorbate: Atoms, slab: Atoms) -> None:
-    assert_no_intramolecular_clashes(adsorbate, slab)
-
-
 def _assert_dissociative_h2_geometry(ads: Atoms, slab: Atoms) -> None:
     assert len(ads) == 2
     pos = ads.get_positions()
@@ -385,7 +381,7 @@ def _assert_survivor_physics(
     )
 
     if not dissociative:
-        _assert_no_intramolecular_clashes(ads, slab_part)
+        assert_no_intramolecular_clashes(ads, slab_part)
 
     if material_type == "slab" and not dissociative:
         # Compare against metal (or framework) atoms only — ignore co-adsorbates.

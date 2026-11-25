@@ -107,6 +107,40 @@ def _setup_inflight_autobatcher(
     )
 
 
+def _prepare_relaxation(
+    *,
+    ts_model,
+    config: AdsorptionConfig,
+    fmax: float,
+    context: str,
+    require_inflight: bool = False,
+) -> tuple[Any, Any, Any]:
+    """Resolve dependencies, optimizer, and convergence function for a relax.
+
+    Also clears CUDA caches; *require_inflight* additionally requires the
+    autobatcher and constraint modules.
+    """
+    ts = _deps.ts
+    if ts is None or (
+        require_inflight
+        and (_deps.InFlightAutoBatcher is None or _deps.ts_constraints is None)
+    ):
+        raise DependencyMissingError(
+            "torch-sim-atomistic",
+            context,
+            "Install with: pip install torch-sim-atomistic",
+        )
+    if ts_model is None:
+        raise ValueError("ts_model must not be None")
+    optimizer = _resolve_ts_optimizer(config.ts_optimizer)
+    with torchsim_output_capture():
+        conv = ts.generate_force_convergence_fn(
+            force_tol=fmax, include_cell_forces=False
+        )
+    _maybe_clear_cuda_cache(ts_model)
+    return ts, optimizer, conv
+
+
 def setup_single_model(  # pragma: no cover - requires MLIP stack / GPU
     model_name: str = "uma-s-1p2",
     device: str = "cuda",
@@ -535,8 +569,7 @@ def _split_forces_by_system(
             )
         counts = np.bincount(idx_int, minlength=n_systems)
         order = np.argsort(idx_int, kind="mergesort")
-        per_system = np.split(forces_np[order], np.cumsum(counts)[:-1])
-        per_system = list(per_system)
+        per_system = list(np.split(forces_np[order], np.cumsum(counts)[:-1]))
 
     for k, (got, expected) in enumerate(zip(per_system, atom_counts, strict=True)):
         if got.shape != (expected, 3):
@@ -667,24 +700,14 @@ def optimize_isolated_molecules_batched(  # pragma: no cover - requires MLIP sta
     """
     if not conformers:
         return []
-    ts = _deps.ts
-    if ts is None:
-        raise DependencyMissingError(
-            "torch-sim-atomistic",
-            "optimize_isolated_molecules_batched",
-            "Install with: pip install torch-sim-atomistic",
-        )
-    if ts_model is None:
-        raise ValueError("ts_model must not be None")
-
-    optimizer = _resolve_ts_optimizer(config.ts_optimizer)
+    ts, optimizer, conv = _prepare_relaxation(
+        ts_model=ts_model,
+        config=config,
+        fmax=fmax,
+        context="optimize_isolated_molecules_batched",
+    )
     swaps = config.steps_between_swaps
     logger.info("Batched optimisation of %d isolated conformers", len(conformers))
-    with torchsim_output_capture():
-        conv = ts.generate_force_convergence_fn(
-            force_tol=fmax, include_cell_forces=False
-        )
-    _maybe_clear_cuda_cache(ts_model)
     try:
         ab = None
         cache_key: tuple | None = None
@@ -801,15 +824,13 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
     if not combined_atoms_list:
         return []
 
-    ts = _deps.ts
-    if ts is None or _deps.InFlightAutoBatcher is None or _deps.ts_constraints is None:
-        raise DependencyMissingError(
-            "torch-sim-atomistic",
-            "optimize_adsorbate_slab_batched",
-            "Install with: pip install torch-sim-atomistic",
-        )
-    if ts_model is None:
-        raise ValueError("ts_model must not be None")
+    ts, optimizer, conv = _prepare_relaxation(
+        ts_model=ts_model,
+        config=config,
+        fmax=config.fmax,
+        context="optimize_adsorbate_slab_batched",
+        require_inflight=True,
+    )
     for i, atoms in enumerate(combined_atoms_list):
         _validate_model_pbc(
             atoms, context=f"optimize_adsorbate_slab_batched system[{i}]"
@@ -839,15 +860,11 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
     )
 
     max_steps = config.stage1_steps + config.stage2_steps
-    optimizer = _resolve_ts_optimizer(config.ts_optimizer)
     swaps = config.steps_between_swaps
 
     model_device = _resolve_model_device(ts_model, config)
-    with torchsim_output_capture():
-        conv = ts.generate_force_convergence_fn(
-            force_tol=config.fmax, include_cell_forces=False
-        )
 
+    max_n_atoms = 0
     try:
         use_saturation_reuse = saturation_reuse and config.saturation_autobatcher_reuse
         # TorchSim memory probing is CUDA-only; CPU uses a single sequential batch.
@@ -917,7 +934,7 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
                         for atoms in combined_atoms_list
                     ]
 
-            def _run_optimize(autobatcher, systems):
+            def _run_optimize(_autobatcher, systems):
                 with torchsim_output_capture():
                     return ts.optimize(
                         system=systems,

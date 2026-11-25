@@ -293,7 +293,6 @@ def test_generate_placements_from_specs_builds_pose_cache_once_for_misses(
     assert len(build_calls) == 1
     assert build_calls[0][0][0] is site_slab
     assert build_calls[0][0][1] is conformers
-    assert build_calls[0][0][2] is config
     assert set(generate_calls) == {1, 2}
     for passed_slab, passed_site_slab, passed_pose_cache in generate_calls.values():
         assert passed_slab is slab
@@ -376,7 +375,6 @@ def test_generate_placements_from_specs_without_cache_builds_pose_cache(monkeypa
         assert len(build_calls) == 1
         assert build_calls[0][0][0] is slab
         assert build_calls[0][0][1] is conformers
-        assert build_calls[0][0][2] is config
         assert generate_calls[0]["pose_cache"] is pose_cache
         assert results[0][0] is not None
         assert results[0][1] is None

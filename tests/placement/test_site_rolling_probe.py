@@ -29,6 +29,7 @@ from metalsurfer.placement.site_rolling_probe import (
 )
 
 from ..conftest import make_nanoparticle, make_porous_framework, make_slab
+from ._helpers import MATERIAL_CASES
 
 
 def test_rolling_probe_accepted_on_adsorption_config():
@@ -251,11 +252,7 @@ def test_rolling_probe_dissociative_hollows_on_slab():
 
 @pytest.mark.parametrize(
     ("material_type", "factory"),
-    [
-        ("slab", make_slab),
-        ("nanoparticle", make_nanoparticle),
-        ("porous", make_porous_framework),
-    ],
+    MATERIAL_CASES,
 )
 def test_rolling_probe_same_path_on_all_materials(material_type, factory):
     sites = get_unified_sites(

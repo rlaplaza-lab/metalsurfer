@@ -35,6 +35,7 @@ from .site_coords import (
     _wrap_cartesian,
     derive_pore_threshold,
 )
+from .site_np import try_delaunay
 
 logger = logging.getLogger(__name__)
 
@@ -319,7 +320,7 @@ def _generate_slab_topology_sites(
 
     Candidates are created in an orientation-aware way and wrapped back into the
     reference cell on periodic axes. *accessibility_tree* must be MIC-aware
-    under PBC (see :func:`metalsurfer.placement.site_plugins.helpers.periodic_accessibility_tree`).
+    under PBC (see :func:`metalsurfer.placement.site_coords.periodic_accessibility_tree`).
 
     When *reuse_delaunay* is True, the provided primary/expanded Delaunay objects
     are reused (planar auto-widen) instead of rebuilding Qhull.
@@ -419,12 +420,7 @@ def _generate_slab_topology_sites(
         return _finalize()
 
     if not reuse_delaunay:
-        primary_delaunay = None
-        if len(top_positions_2d) >= 3:
-            try:
-                primary_delaunay = Delaunay(top_positions_2d)
-            except (QhullError, ValueError, RuntimeError):
-                primary_delaunay = None
+        primary_delaunay = try_delaunay(top_positions_2d, delaunay_cls=Delaunay)
 
         exp2d, expanded_origin_local_index, exp3d = _expand_top_layer_ab_images(
             top_positions_2d,
@@ -434,12 +430,7 @@ def _generate_slab_topology_sites(
         )
         if exp3d is None:
             raise ValueError("3D image expansion failed for top-layer sites")
-        exp_tri = None
-        if len(exp2d) >= 3:
-            try:
-                exp_tri = Delaunay(exp2d)
-            except (QhullError, ValueError, RuntimeError):
-                exp_tri = None
+        exp_tri = try_delaunay(exp2d, delaunay_cls=Delaunay)
     else:
         # Reuse Qhull; only rebuild image expansion for 3D lift coordinates.
         if exp2d is None or expanded_origin_local_index is None:
@@ -750,12 +741,7 @@ def _build_delaunay_classification_index(
             exp_xy, exp_origin, _ = _expand_top_layer_ab_images(
                 top_xy, cell=cell, pbc=pbc
             )
-            exp_tri: Delaunay | None = None
-            if len(exp_xy) >= 3:
-                try:
-                    exp_tri = Delaunay(exp_xy)
-                except (QhullError, ValueError, RuntimeError):
-                    exp_tri = None
+            exp_tri = try_delaunay(exp_xy, delaunay_cls=Delaunay)
             if exp_tri is not None:
                 work_xy = exp_xy
                 origin_local = exp_origin

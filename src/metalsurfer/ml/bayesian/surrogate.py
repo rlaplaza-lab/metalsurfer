@@ -426,25 +426,16 @@ def train_surrogate(
             n_estimators,
         )
         return pipeline
-    if surrogate == "ridge":
-        pipeline = _build_estimator("ridge", random_state=random_state)
+    if surrogate in ("ridge", "gradient_boost"):
+        # Both build their estimator through ``_build_estimator``; HGB also
+        # supports sample_weight (incl. transfer).
+        pipeline = _build_estimator(surrogate, random_state=random_state)
         pipeline.fit(X, y, **_tree_pipeline_fit_kwargs(sample_weight))
         if attach_uncertainty:
             _attach_residual_uncertainty(pipeline, X, y, random_state=random_state)
         logger.info(
-            "Trained ridge surrogate on %d samples (residual_std=%s)",
-            len(np.asarray(y)),
-            _format_residual_std(pipeline),
-        )
-        return pipeline
-    if surrogate == "gradient_boost":
-        # HistGradientBoostingRegressor supports sample_weight (incl. transfer).
-        pipeline = _build_estimator("gradient_boost", random_state=random_state)
-        pipeline.fit(X, y, **_tree_pipeline_fit_kwargs(sample_weight))
-        if attach_uncertainty:
-            _attach_residual_uncertainty(pipeline, X, y, random_state=random_state)
-        logger.info(
-            "Trained gradient_boost surrogate on %d samples (residual_std=%s)",
+            "Trained %s surrogate on %d samples (residual_std=%s)",
+            surrogate,
             len(np.asarray(y)),
             _format_residual_std(pipeline),
         )

@@ -18,10 +18,8 @@ from .._constants import (
     _SURFACE_COVALENT_RADIUS_FALLBACK,
     _SURFACE_NORMAL_FALLBACK_NORM_EPS,
     _VORONOI_DEDUP_TOLERANCE,
-    _VORONOI_MAX_DISTANCE_COVALENT_SCALE,
 )
 from ..site_coords import (
-    _build_periodic_images,
     _deduplicate_points,
     _height_along_slab_normal,
     _minimum_image_cartesian_delta,
@@ -31,6 +29,7 @@ from ..site_coords import (
     _slab_outward_normal,
     _slab_vacuum_face_sign,
     _wrap_cartesian,
+    median_nn_or_fallback,
     mic_support_positions,
     top_layer_mask_by_normal,
 )
@@ -351,71 +350,6 @@ def candidate_enrichment_frames(
             else:
                 normals[i] = np.array([0.0, 0.0, 1.0], dtype=float)
     return normals, clearances
-
-
-def median_nn_or_fallback(
-    nn_dists: np.ndarray,
-    *,
-    reference_positions: np.ndarray | None = None,
-    cell: np.ndarray | None = None,
-    pbc: np.ndarray | None = None,
-) -> float:
-    """Median nearest-neighbour distance, or top-layer / covalent fallback.
-
-    When *nn_dists* is empty (e.g. planar slabs that skip Voronoi), prefer the
-    median MIC nearest-neighbour spacing of *reference_positions* (typically the
-    top layer) over a fixed covalent-scale constant.
-    """
-    if len(nn_dists) > 0:
-        return float(np.median(nn_dists))
-    if (
-        reference_positions is not None
-        and len(reference_positions) >= 2
-        and cell is not None
-        and pbc is not None
-    ):
-        pts = np.asarray(reference_positions, dtype=float)
-        pbc_arr = np.asarray(pbc, dtype=bool)
-        cell_arr = np.asarray(cell, dtype=float)
-        if cell_has_volume(cell_arr) and np.any(pbc_arr):
-            margin = float(np.max(np.linalg.norm(cell_arr[pbc_arr], axis=1)))
-            offsets = _periodic_image_offsets(cell_arr, pbc_arr, margin)
-            ext = np.vstack([pts + off for off in offsets])
-            tree = KDTree(ext)
-            k = min(len(ext), len(offsets) + 1)
-            dists, idxs = tree.query(pts, k=k)
-            dists = np.atleast_2d(np.asarray(dists, dtype=float))
-            idxs = np.atleast_2d(np.asarray(idxs))
-            n = len(pts)
-            valid = (idxs % n) != np.arange(n)[:, None]
-            nn = np.where(valid, dists, np.inf).min(axis=1)
-            finite = nn[np.isfinite(nn)]
-            if len(finite) > 0:
-                return float(np.median(finite))
-        else:
-            tree = KDTree(pts)
-            nn_d, _ = tree.query(pts, k=2)
-            return float(np.median(np.asarray(nn_d, dtype=float)[:, 1]))
-    return _VORONOI_MAX_DISTANCE_COVALENT_SCALE * _SURFACE_COVALENT_RADIUS_FALLBACK
-
-
-def periodic_accessibility_tree(
-    positions: np.ndarray,
-    cell: np.ndarray,
-    pbc: np.ndarray,
-    max_distance: float,
-) -> KDTree:
-    """KDTree over periodic images, for candidate-to-framework distance gating.
-
-    A plain ``KDTree(positions)`` reports the *in-cell* nearest-neighbour
-    distance, which overestimates the true minimum-image distance for
-    candidates near an a/b boundary. The image margin covers ``max_distance``
-    so any candidate that would pass the accessibility window is found.
-    """
-    if not np.any(pbc) or not cell_has_volume(cell):
-        return KDTree(positions)
-    margin = float(max_distance) + _VORONOI_DEDUP_TOLERANCE
-    return KDTree(_build_periodic_images(positions, cell, pbc, margin=margin))
 
 
 def top_layer_is_planar_from_arrays(

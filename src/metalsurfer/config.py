@@ -1,6 +1,7 @@
 """Configuration for adsorption screening workflows."""
 
-from collections.abc import Callable, Mapping
+import difflib
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, fields
 from math import isfinite
 from typing import Any, Literal
@@ -36,15 +37,13 @@ from .site_plugin_ids import (
     SITE_GENERATORS as _SITE_GENERATORS,
 )
 
-
-def _default_bo_failure_penalty_overrides() -> dict[str, float]:
-    return {
-        "generation": 18.0,
-        "optimization": 20.0,
-        "validation": 14.0,
-        "energy_cap": 12.0,
-        "filter": 11.0,
-    }
+_DEFAULT_BO_FAILURE_PENALTY_OVERRIDES: dict[str, float] = {
+    "generation": 18.0,
+    "optimization": 20.0,
+    "validation": 14.0,
+    "energy_cap": 12.0,
+    "filter": 11.0,
+}
 
 
 @dataclass
@@ -91,7 +90,7 @@ class BOConfig:
     include_failure_negatives: bool = True
     failure_penalty_default: float = 10.0
     failure_penalty_overrides: dict[str, float] = field(
-        default_factory=_default_bo_failure_penalty_overrides
+        default_factory=lambda: dict(_DEFAULT_BO_FAILURE_PENALTY_OVERRIDES)
     )
     transfer: BOTransferConfig = field(default_factory=BOTransferConfig)
 
@@ -103,40 +102,71 @@ _BO_TOP_FIELDS: frozenset[str] = frozenset(
     f.name for f in fields(BOConfig) if f.name != "transfer"
 )
 
-
-def _bo_transfer_from_mapping(data: Mapping[str, Any] | None) -> BOTransferConfig:
-    if data is None:
-        return BOTransferConfig()
-    if isinstance(data, BOTransferConfig):
-        return data
-    unknown = set(data) - _BO_TRANSFER_FIELDS
-    if unknown:
-        quoted = ", ".join(sorted(unknown))
-        raise ValueError(f"bo.transfer contains unknown keys: {quoted}")
-    return BOTransferConfig(**dict(data))
-
-
 # Keys renamed in 0.10.0, with the version that introduced the new name.
 _BO_RENAMED_KEYS: dict[str, str] = {"total_budget": "total_batches"}
 
 
-def _bo_config_from_mapping(data: Mapping[str, Any] | None) -> BOConfig:
+def _format_unknown_key(
+    key: str,
+    allowed: Iterable[str] = (),
+    *,
+    renamed_to: str | None = None,
+) -> str:
+    """Format one unknown key with a rename / close-match hint."""
+    if renamed_to is not None:
+        return f"{key!r} (renamed to {renamed_to!r} in 0.10.0)"
+    if allowed:
+        suggestion = difflib.get_close_matches(key, sorted(allowed), n=1, cutoff=0.6)
+        if suggestion:
+            return f"{key!r} (did you mean {suggestion[0]!r}?)"
+    return repr(key)
+
+
+def _coerce_config_dataclass[T](
+    cls: type[T],
+    data: Mapping[str, Any] | None,
+    known: frozenset[str],
+    *,
+    context: str,
+    format_unknown: Callable[[str], str] = str,
+    **extra: Any,
+) -> T:
+    """Build *cls* from *data*, rejecting unknown keys with *context*."""
     if data is None:
-        return BOConfig()
+        return cls(**extra)
+    if isinstance(data, cls):
+        return data
+    unknown = sorted(set(data) - known)
+    if unknown:
+        quoted = ", ".join(format_unknown(key) for key in unknown)
+        raise ValueError(f"{context} contains unknown keys: {quoted}")
+    return cls(**dict(data), **extra)
+
+
+def _bo_transfer_from_mapping(data: Mapping[str, Any] | None) -> BOTransferConfig:
+    return _coerce_config_dataclass(
+        BOTransferConfig,
+        data,
+        _BO_TRANSFER_FIELDS,
+        context="bo.transfer",
+    )
+
+
+def _bo_config_from_mapping(data: Mapping[str, Any] | None) -> BOConfig:
     if isinstance(data, BOConfig):
         return data
-    payload = dict(data)
+    payload = {} if data is None else dict(data)
     transfer = _bo_transfer_from_mapping(payload.pop("transfer", None))
-    unknown = set(payload) - _BO_TOP_FIELDS
-    if unknown:
-        hints = [
-            f"{key!r} (renamed to {_BO_RENAMED_KEYS[key]!r} in 0.10.0)"
-            if key in _BO_RENAMED_KEYS
-            else repr(key)
-            for key in sorted(unknown)
-        ]
-        raise ValueError(f"bo contains unknown keys: {', '.join(hints)}")
-    return BOConfig(**payload, transfer=transfer)
+    return _coerce_config_dataclass(
+        BOConfig,
+        payload,
+        _BO_TOP_FIELDS,
+        context="bo",
+        format_unknown=lambda key: _format_unknown_key(
+            key, renamed_to=_BO_RENAMED_KEYS.get(key)
+        ),
+        transfer=transfer,
+    )
 
 
 def fold_bo_config(config_data: dict[str, Any]) -> BOConfig:
@@ -166,6 +196,11 @@ def _check_positive(name: str, value: float) -> None:
 def _check_non_negative(name: str, value: float) -> None:
     if not isfinite(value) or value < 0:
         raise ValueError(f"{name} must be non-negative, got {value!r}")
+
+
+def _check_bool(name: str, value: Any) -> None:
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} must be a bool, got {type(value).__name__}")
 
 
 def _check_positive_int(name: str, value: int) -> None:
@@ -396,12 +431,17 @@ def _validate_saturation_reservoir(root: "AdsorptionConfig") -> None:
 
 
 def _check_unit_interval(
-    name: str, value: float, *, exclusive_upper: bool = False
+    name: str,
+    value: float,
+    *,
+    exclusive_upper: bool = False,
+    mention_finite: bool = True,
 ) -> None:
     upper_ok = value < 1.0 if exclusive_upper else value <= 1.0
     if not isfinite(value) or not value >= 0.0 or not upper_ok:
         bound = "[0.0, 1.0)" if exclusive_upper else "[0.0, 1.0]"
-        raise ValueError(f"{name} must be finite in {bound}, got {value!r}")
+        qualifier = "finite " if mention_finite else ""
+        raise ValueError(f"{name} must be {qualifier}in {bound}, got {value!r}")
 
 
 def _check_finite_nonneg(name: str, value: float) -> None:
@@ -543,11 +583,11 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
             f"got min={root.min_initial_distance}, max={root.max_initial_distance}"
         )
     _validate_strict_contact_window(root)
-    if not 0.0 <= root.flat_aromatic_parallel_fraction <= 1.0:
-        raise ValueError(
-            "flat_aromatic_parallel_fraction must be in [0.0, 1.0], "
-            f"got {root.flat_aromatic_parallel_fraction}"
-        )
+    _check_unit_interval(
+        "flat_aromatic_parallel_fraction",
+        root.flat_aromatic_parallel_fraction,
+        mention_finite=False,
+    )
     if root.voronoi_probe_radius is not None and root.voronoi_probe_radius <= 0:
         raise ValueError(
             f"voronoi_probe_radius must be positive, got {root.voronoi_probe_radius}"
@@ -561,21 +601,9 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
             f"voronoi_max_site_distance ({root.voronoi_max_site_distance}) must be "
             f"greater than voronoi_probe_radius ({root.voronoi_probe_radius})"
         )
-    if not isinstance(root.voronoi_site_enrichment, bool):
-        raise ValueError(
-            "voronoi_site_enrichment must be a bool, "
-            f"got {type(root.voronoi_site_enrichment).__name__}"
-        )
-    if not isinstance(root.occupancy_use_footprint, bool):
-        raise ValueError(
-            "occupancy_use_footprint must be a bool, "
-            f"got {type(root.occupancy_use_footprint).__name__}"
-        )
-    if not isinstance(root.placement_clash_descent, bool):
-        raise ValueError(
-            "placement_clash_descent must be a bool, "
-            f"got {type(root.placement_clash_descent).__name__}"
-        )
+    _check_bool("voronoi_site_enrichment", root.voronoi_site_enrichment)
+    _check_bool("occupancy_use_footprint", root.occupancy_use_footprint)
+    _check_bool("placement_clash_descent", root.placement_clash_descent)
     if not (
         isinstance(root.occupancy_footprint_scale, (int, float))
         and not isinstance(root.occupancy_footprint_scale, bool)
@@ -678,11 +706,11 @@ def _validate_relaxation(root: "AdsorptionConfig") -> None:
         _check_positive_int(
             "autobatcher_max_atoms_to_try", root.autobatcher_max_atoms_to_try
         )
-    if not 0.0 <= root.saturation_autobatcher_reuse_growth_fraction <= 1.0:
-        raise ValueError(
-            "saturation_autobatcher_reuse_growth_fraction must be in [0.0, 1.0], "
-            f"got {root.saturation_autobatcher_reuse_growth_fraction}"
-        )
+    _check_unit_interval(
+        "saturation_autobatcher_reuse_growth_fraction",
+        root.saturation_autobatcher_reuse_growth_fraction,
+        mention_finite=False,
+    )
 
 
 def _validate_bo_transfer(transfer: BOTransferConfig) -> None:
@@ -1070,11 +1098,7 @@ class AdsorptionConfig:
 
         validate_uma_setup(self.model_name, self.task_name, self.dispersion)
 
-        if not isinstance(self.skip_topology_check, bool):
-            raise ValueError(
-                "skip_topology_check must be a bool, "
-                f"got {type(self.skip_topology_check).__name__}"
-            )
+        _check_bool("skip_topology_check", self.skip_topology_check)
 
         _check_device(self.device)
 

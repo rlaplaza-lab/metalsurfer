@@ -309,14 +309,15 @@ def check_frozen_substrate_displacement(
     tolerance_ang
         Displacement tolerance in Å.
     """
+    frozen = frozen_indices_from_constraints(reference_slab)
+    if not frozen:
+        return True, "no FixAtoms constraints on reference slab"
     max_disp = max_frozen_substrate_displacement(
         optimized,
         reference_slab,
         slab_size=slab_size,
+        frozen_indices=frozen,
     )
-    frozen = frozen_indices_from_constraints(reference_slab)
-    if not frozen:
-        return True, "no FixAtoms constraints on reference slab"
     if max_disp > tolerance_ang:
         return (
             False,

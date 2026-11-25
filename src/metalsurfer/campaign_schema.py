@@ -1,7 +1,6 @@
 """YAML campaign schema parsing for the Python campaign API."""
 
 import dataclasses
-import difflib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -10,7 +9,7 @@ import yaml
 from ase import Atoms
 
 from ._utils import require_unique_molecule_names
-from .config import AdsorptionConfig, fold_bo_config
+from .config import AdsorptionConfig, _format_unknown_key, fold_bo_config
 from .placement._material import validate_material_type
 from .result_paths import results_dir_for
 from .surface_prep import Substrate
@@ -151,10 +150,8 @@ def _validate_config_keys(config_raw: dict[str, Any]) -> None:
     unknown = set(config_raw) - allowed
     if not unknown:
         return
-    for key in sorted(unknown):
-        suggestion = difflib.get_close_matches(key, sorted(allowed), n=1, cutoff=0.6)
-        hint = f" (did you mean {suggestion[0]!r}?)" if suggestion else ""
-        raise ValueError(f"config contains unknown key {key!r}{hint}")
+    quoted = ", ".join(_format_unknown_key(key, allowed) for key in sorted(unknown))
+    raise ValueError(f"config contains unknown keys: {quoted}")
 
 
 def parse_campaign_dict(data: dict[str, Any]) -> CampaignDocument:

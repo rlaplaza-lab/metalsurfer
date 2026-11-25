@@ -119,7 +119,7 @@ def generate_placements_from_specs(
             for spec in specs
         )
     ):
-        pose_cache = build_pose_batch_cache(placement_ref, conformers, config)
+        pose_cache = build_pose_batch_cache(placement_ref, conformers)
 
     def _one(
         spec: PlacementSpec,

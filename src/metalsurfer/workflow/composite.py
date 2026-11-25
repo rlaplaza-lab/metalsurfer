@@ -48,9 +48,8 @@ from ..placement.geometry import (
 )
 from ..placement.occupancy import incoming_inplane_radius
 from ..placement.site_coords import _slab_normal
-from ..surface_prep import apply_material_pbc
 from ..surface_prep.freeze import check_frozen_substrate_displacement
-from .shared import _validate_geometry
+from .shared import _combine_slab_adsorbate, _copy_with_material_pbc, _validate_geometry
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +83,11 @@ def build_composite_candidate(
         constraints refer to the untouched substrate prefix.
     """
     composite = slab_atoms.copy()
+    if not adsorbates:
+        composite.set_pbc(calculator_pbc_for_atoms(composite))
+        return composite
     for adsorbate in adsorbates:
-        composite += adsorbate
-    composite.set_pbc(calculator_pbc_for_atoms(composite))
+        composite = _combine_slab_adsorbate(composite, adsorbate)
     return composite
 
 
@@ -864,9 +865,7 @@ def _rewrite_relaxed_composite(
     e_ads_per_mol = e_ads_total / len(winners)
     rewritten: list[ScreeningResult] = []
     for k, winner in enumerate(winners):
-        atoms_out = opt_atoms.copy()
-        atoms_out.calc = opt_atoms.calc
-        apply_material_pbc(atoms_out, material_type)
+        atoms_out = _copy_with_material_pbc(opt_atoms, material_type)
         rewritten.append(
             replace(
                 winner,

@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import shutil
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -168,7 +168,7 @@ def _write_placement_artifacts(
     adsorbate_xyz_file = ads_base / f"conformer_{pid:03d}_adsorbate.xyz"
     vasp_subdir = vasp_base / f"conformer_{pid:03d}"
     _write_clean_xyz(entry.atoms, str(xyz_file))
-    adsorbate_atoms = entry.atoms[entry.slab_size :].copy()
+    adsorbate_atoms = entry.atoms[entry.slab_size :]
     _write_clean_xyz(adsorbate_atoms, str(adsorbate_xyz_file))
     if config.write_vasp_inputs:
         _write_vasp_inputs(
@@ -544,9 +544,7 @@ def _write_saturation_placement_tree(
 
 
 def _write_final_saturated_slab(atoms: Atoms, mol_dir: str) -> None:
-    final = atoms.copy()
-    final.calc = None
-    _write_clean_xyz(final, f"{mol_dir}/final_saturated_slab.xyz")
+    _write_clean_xyz(atoms, f"{mol_dir}/final_saturated_slab.xyz")
 
 
 def _write_saturation_run_structures(
@@ -716,6 +714,75 @@ def _collect_saturation_csv_rows(
     return detail_rows, placement_rows
 
 
+def _persist_saturation_run(
+    *,
+    surface_type: str,
+    config: AdsorptionConfig,
+    material_type: str,
+    batches: Sequence[
+        tuple[
+            Sequence[SaturationStepResult | MultiMolSaturationStepResult],
+            dict[str, Any],
+            dict[str, Any],
+        ]
+    ],
+    summary_rows_factory: Callable[[str], list[dict[str, Any]]],
+    structure_runs: Sequence[
+        tuple[
+            str,
+            Sequence[SaturationStepResult | MultiMolSaturationStepResult],
+            Atoms | None,
+            Any,
+        ]
+    ],
+    run_settings_kwargs: dict[str, Any],
+    log_message: str,
+) -> None:
+    """Shared persistence path for single- and multi-molecule saturation runs.
+
+    Summary rows and structure trees are supplied by the caller; the summary CSV
+    keeps the run-specific label column (``molecule`` vs ``molecules``).
+    """
+    write_vasp = config.write_vasp_inputs
+    results_dir, vasp_base = _saturation_results_dirs(
+        surface_type, write_vasp=write_vasp
+    )
+    include_provenance = bool(config.export_placement_provenance)
+    context_row = config_to_context_row(
+        config,
+        material_type=material_type,
+        include_provenance=include_provenance,
+    )
+    detail_rows: list[dict[str, Any]] = []
+    placement_rows: list[dict[str, Any]] = []
+    save_all = config.saturation_save_all_placements
+    for steps, detail_kwargs, rows_kwargs in batches:
+        d_rows, p_rows = _collect_saturation_csv_rows(
+            steps,
+            results_dir=results_dir,
+            context_row=context_row,
+            include_provenance=include_provenance,
+            save_all=save_all,
+            write_vasp=write_vasp,
+            detail_kwargs=detail_kwargs,
+            rows_kwargs=rows_kwargs,
+        )
+        detail_rows.extend(d_rows)
+        placement_rows.extend(p_rows)
+    _persist_saturation_outputs(
+        surface_type=surface_type,
+        config=config,
+        results_dir=results_dir,
+        vasp_base=vasp_base,
+        detail_rows=detail_rows,
+        placement_rows=placement_rows,
+        summary_rows=summary_rows_factory(results_dir),
+        structure_runs=structure_runs,
+        run_settings_kwargs=run_settings_kwargs,
+        log_message=log_message,
+    )
+
+
 def save_saturation_results(
     saturation_results: Sequence[SaturationRunResult | MultiMolSaturationRunResult],
     surface_type: str = "manual",
@@ -772,61 +839,36 @@ def save_saturation_results(
     if not singles:
         return
 
-    single_results = singles
-    if len(single_results) > 1:
+    if len(singles) > 1:
         logger.warning(
             "Save_saturation_results received %d single-molecule results; "
             "all entries will be saved (no per-molecule truncation)",
-            len(single_results),
+            len(singles),
         )
-    write_vasp = config.write_vasp_inputs
-    results_dir, vasp_base = _saturation_results_dirs(
-        surface_type, write_vasp=write_vasp
-    )
-    include_provenance = bool(config.export_placement_provenance)
-    context_row = config_to_context_row(
-        config,
-        material_type=material_type,
-        include_provenance=include_provenance,
-    )
-    detail_rows: list[dict[str, Any]] = []
-    placement_rows: list[dict[str, Any]] = []
-    save_all = config.saturation_save_all_placements
-
-    for sr in single_results:
-        d_rows, p_rows = _collect_saturation_csv_rows(
-            sr.steps,
-            results_dir=results_dir,
-            context_row=context_row,
-            include_provenance=include_provenance,
-            save_all=save_all,
-            write_vasp=write_vasp,
-            detail_kwargs={"saturation_molecule": sr.molecule},
-            rows_kwargs={"saturation_molecule": sr.molecule, "step_prefix": True},
-        )
-        detail_rows.extend(d_rows)
-        placement_rows.extend(p_rows)
-
-    summary_rows = [
-        {
-            "molecule": sr.molecule,
-            "n_molecules_at_saturation": sr.n_molecules_at_saturation,
-            "n_steps": len(sr.steps),
-            "final_slab_path": (
-                saturation_xyz_dir(results_dir, sr.molecule)
-                / "final_saturated_slab.xyz"
-            ).as_posix(),
-        }
-        for sr in single_results
-    ]
-    _persist_saturation_outputs(
+    _persist_saturation_run(
         surface_type=surface_type,
         config=config,
-        results_dir=results_dir,
-        vasp_base=vasp_base,
-        detail_rows=detail_rows,
-        placement_rows=placement_rows,
-        summary_rows=summary_rows,
+        material_type=material_type,
+        batches=[
+            (
+                sr.steps,
+                {"saturation_molecule": sr.molecule},
+                {"saturation_molecule": sr.molecule, "step_prefix": True},
+            )
+            for sr in singles
+        ],
+        summary_rows_factory=lambda results_dir: [
+            {
+                "molecule": sr.molecule,
+                "n_molecules_at_saturation": sr.n_molecules_at_saturation,
+                "n_steps": len(sr.steps),
+                "final_slab_path": (
+                    saturation_xyz_dir(results_dir, sr.molecule)
+                    / "final_saturated_slab.xyz"
+                ).as_posix(),
+            }
+            for sr in singles
+        ],
         structure_runs=[
             (
                 sr.molecule,
@@ -834,13 +876,13 @@ def save_saturation_results(
                 sr.final_slab_atoms,
                 (lambda _step_result, mol=sr.molecule: mol),
             )
-            for sr in single_results
+            for sr in singles
         ],
         run_settings_kwargs={
-            "n_molecules": len(single_results),
-            "total_steps": sum(len(sr.steps) for sr in single_results),
+            "n_molecules": len(singles),
+            "total_steps": sum(len(sr.steps) for sr in singles),
             "n_molecules_at_saturation": sum(
-                sr.n_molecules_at_saturation for sr in single_results
+                sr.n_molecules_at_saturation for sr in singles
             ),
         },
         log_message="Saved saturation results to %s",
@@ -875,44 +917,28 @@ def save_multi_mol_saturation_results(
     material_type
         ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
     """
-    write_vasp = config.write_vasp_inputs
-    results_dir, vasp_base = _saturation_results_dirs(
-        surface_type, write_vasp=write_vasp
-    )
     mol_label = _saturation_molecule_label(result.molecules)
-    mol_dir = saturation_xyz_dir(results_dir, mol_label).as_posix()
-
-    include_provenance = bool(config.export_placement_provenance)
-    context_row = config_to_context_row(
-        config,
-        material_type=material_type,
-        include_provenance=include_provenance,
-    )
-    detail_rows, placement_rows = _collect_saturation_csv_rows(
-        result.steps,
-        results_dir=results_dir,
-        context_row=context_row,
-        include_provenance=include_provenance,
-        save_all=config.saturation_save_all_placements,
-        write_vasp=write_vasp,
-        detail_kwargs={"molecules_label": mol_label},
-        rows_kwargs={"molecules_label": mol_label},
-    )
-
-    _persist_saturation_outputs(
+    _persist_saturation_run(
         surface_type=surface_type,
         config=config,
-        results_dir=results_dir,
-        vasp_base=vasp_base,
-        detail_rows=detail_rows,
-        placement_rows=placement_rows,
-        summary_rows=[
+        material_type=material_type,
+        batches=[
+            (
+                result.steps,
+                {"molecules_label": mol_label},
+                {"molecules_label": mol_label},
+            )
+        ],
+        summary_rows_factory=lambda results_dir: [
             {
                 "molecules": mol_label,
                 "n_molecules_at_saturation": result.n_molecules_at_saturation,
                 "n_steps": len(result.steps),
                 "molecule_counts": str(result.molecule_counts),
-                "final_slab_path": f"{mol_dir}/final_saturated_slab.xyz",
+                "final_slab_path": (
+                    f"{saturation_xyz_dir(results_dir, mol_label).as_posix()}"
+                    "/final_saturated_slab.xyz"
+                ),
             }
         ],
         structure_runs=[
@@ -1061,15 +1087,21 @@ def _write_vasp_inputs(
         f.write(kpoints)
 
 
-def _write_clean_xyz(atoms: Atoms, filename: str) -> None:
-    Path(filename).parent.mkdir(parents=True, exist_ok=True)
-    # Create a copy without calculator to avoid shape mismatches in results arrays
+def _clean_atoms_for_xyz(atoms: Atoms) -> Atoms:
+    """Return an XYZ-safe copy of *atoms* with calculator and stale metadata removed.
+
+    Dropping the calculator avoids shape mismatches; stale ``adsorbate_info``
+    from ASE's fcc111/surface builder is invalid after our transforms.
+    """
     atoms_copy = atoms.copy()
     atoms_copy.calc = None
-    # Drop stale ASE build metadata: fcc111/surface cache the cell + site table, which
-    # is invalid after our supercell / z-alignment / vacuum transforms. ASE extxyz drops
-    # it with a UserWarning anyway, so remove it here to keep output clean.
     atoms_copy.info.pop("adsorbate_info", None)
+    return atoms_copy
+
+
+def _write_clean_xyz(atoms: Atoms, filename: str) -> None:
+    Path(filename).parent.mkdir(parents=True, exist_ok=True)
+    atoms_copy = _clean_atoms_for_xyz(atoms)
     atoms_copy.write(filename, format="extxyz")
 
 
@@ -1080,8 +1112,6 @@ def _write_site_overlay_xyz(
 ) -> None:
     """Write *slab* with atomic-number-0 markers at *positions* as extxyz."""
     overlay = slab.copy()
-    overlay.calc = None
-    overlay.info.pop("adsorbate_info", None)
     coords = np.asarray(positions, dtype=float).reshape(-1, 3)
     if len(coords) > 0:
         overlay.extend(
@@ -1118,16 +1148,13 @@ def _write_saturation_step_xyz(best: ScreeningResult, mol_dir: str, step: int) -
     paths = _saturation_step_structure_paths(
         Path(mol_dir), step, best.energy_adsorption
     )
-    best_atoms_copy = best.atoms.copy()
-    best_atoms_copy.calc = None
-    best_atoms_copy.info.pop("adsorbate_info", None)
     primary = paths["step_structure_path"]
     energy_path = paths["step_structure_energy_path"]
-    _write_clean_xyz(best_atoms_copy, primary)
+    _write_clean_xyz(best.atoms, primary)
     Path(energy_path).unlink(missing_ok=True)
     try:
         os.link(primary, energy_path)
     except OSError:
         shutil.copyfile(primary, energy_path)
-    adsorbate = best.atoms[best.slab_size :].copy()
+    adsorbate = best.atoms[best.slab_size :]
     _write_clean_xyz(adsorbate, paths["step_adsorbate_path"])

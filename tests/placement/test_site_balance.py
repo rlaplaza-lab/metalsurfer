@@ -14,7 +14,8 @@ from metalsurfer.placement.pose.height import _vdw_pair_clearance
 from metalsurfer.placement.site_context import site_context_for_sampling
 from metalsurfer.placement.site_coords import exposed_lower_band_indices
 
-from ..conftest import make_nanoparticle, make_porous_framework, make_slab, make_water
+from ..conftest import make_slab, make_water
+from ._helpers import MATERIAL_CASES
 
 
 def _square_layer(n: int, z: float, spacing: float = 2.7) -> list[list[float]]:
@@ -165,14 +166,7 @@ def _com_heights(atoms, material: str, *, full=None):
     return heights
 
 
-@pytest.mark.parametrize(
-    ("material", "factory"),
-    [
-        ("slab", make_slab),
-        ("nanoparticle", make_nanoparticle),
-        ("porous", make_porous_framework),
-    ],
-)
+@pytest.mark.parametrize(("material", "factory"), MATERIAL_CASES)
 def test_wall_z_fractions_are_evenly_spaced(material, factory):
     heights = _com_heights(factory(), material)
     step = heights[1] - heights[0]

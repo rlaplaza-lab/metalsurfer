@@ -373,7 +373,7 @@ def test_topology_bridges_keep_distinct_pbc_midpoints():
     cell = np.diag([4.0, 4.0, 20.0])
     pbc = np.array([True, True, False], dtype=bool)
     top_idx = np.arange(4, dtype=int)
-    from metalsurfer.placement.site_plugins.helpers import (
+    from metalsurfer.placement.site_coords import (
         periodic_accessibility_tree as _periodic_accessibility_tree,
     )
 
@@ -749,11 +749,13 @@ def test_issue6_ni55_and_ni13_expose_atop_bridge_hollow():
         _ATOP_INJECTION_HEIGHT_FACTOR,
         _VORONOI_PROBE_RADIUS_COVALENT_SCALE,
     )
-    from metalsurfer.placement.site_coords import _mean_covalent_radius
-    from metalsurfer.placement.site_np import _hull_signed_distances
-    from metalsurfer.placement.site_plugins.helpers import (
+    from metalsurfer.placement.site_coords import (
+        _mean_covalent_radius,
+    )
+    from metalsurfer.placement.site_coords import (
         median_nn_or_fallback as _median_nn_or_fallback,
     )
+    from metalsurfer.placement.site_np import _hull_signed_distances
 
     for name, atoms in (
         ("Ni55", Octahedron("Ni", 5, 2)),
@@ -948,7 +950,7 @@ def test_median_nn_or_fallback_elongated_cell_avoids_self_image():
         _SURFACE_COVALENT_RADIUS_FALLBACK,
         _VORONOI_MAX_DISTANCE_COVALENT_SCALE,
     )
-    from metalsurfer.placement.site_plugins.helpers import (
+    from metalsurfer.placement.site_coords import (
         median_nn_or_fallback as _median_nn_or_fallback,
     )
 
@@ -1056,11 +1058,11 @@ def test_cluster_equivalent_sites_anisotropic_slab_metric_bound():
 def test_inject_atop_pbc_boundary_duplicate_merged_by_final_dedup():
     """PBC-aware merge alone collapses boundary-duplicate atop injections."""
     from metalsurfer.placement._constants import _ATOP_INJECTION_HEIGHT_FACTOR
-    from metalsurfer.placement.site_plugins.helpers import (
-        inject_atop_sites,
+    from metalsurfer.placement.site_coords import (
+        periodic_accessibility_tree as _periodic_accessibility_tree,
     )
     from metalsurfer.placement.site_plugins.helpers import (
-        periodic_accessibility_tree as _periodic_accessibility_tree,
+        inject_atop_sites,
     )
 
     positions = np.array(
@@ -1154,7 +1156,7 @@ def test_merge_dedup_freezes_existing_unique_sites():
 
 def test_topology_boundary_candidate_retained_with_accessibility_tree():
     """PBC-aware accessibility_tree keeps a boundary candidate a plain tree drops."""
-    from metalsurfer.placement.site_plugins.helpers import (
+    from metalsurfer.placement.site_coords import (
         periodic_accessibility_tree as _periodic_accessibility_tree,
     )
     from metalsurfer.placement.site_voronoi import _generate_slab_topology_sites

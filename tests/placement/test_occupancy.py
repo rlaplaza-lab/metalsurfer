@@ -46,15 +46,14 @@ from metalsurfer.workflow.shared import PlacementFailureEvent
 
 from ..conftest import (
     make_h2,
-    make_nanoparticle,
     make_placement_descriptor,
-    make_porous_framework,
     make_screening_result,
     make_slab,
     make_water,
     water_conformers,
 )
 from ._helpers import (
+    MATERIAL_CASES,
     _generate_placements,
     _make_site,
     _round_atop_placement_spec,
@@ -1523,14 +1522,7 @@ def test_filter_sites_by_occupancy_mic_wrap():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "material_type, factory",
-    [
-        ("slab", make_slab),
-        ("nanoparticle", make_nanoparticle),
-        ("porous", make_porous_framework),
-    ],
-)
+@pytest.mark.parametrize("material_type, factory", MATERIAL_CASES)
 def test_occupancy_filter_excludes_near_adsorbate_each_material(material_type, factory):
     """A site near an existing adsorbate is blocked; a free site is kept (per material)."""
     structure = factory()
@@ -1550,14 +1542,7 @@ def test_occupancy_filter_excludes_near_adsorbate_each_material(material_type, f
     assert np.allclose(kept[0].xyz, far.xyz)
 
 
-@pytest.mark.parametrize(
-    "material_type, factory",
-    [
-        ("slab", make_slab),
-        ("nanoparticle", make_nanoparticle),
-        ("porous", make_porous_framework),
-    ],
-)
+@pytest.mark.parametrize("material_type, factory", MATERIAL_CASES)
 def test_initial_placement_distance_packs_free_rejects_blocked_each_material(
     material_type, factory
 ):

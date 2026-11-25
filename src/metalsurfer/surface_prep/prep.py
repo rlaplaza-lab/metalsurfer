@@ -1,7 +1,6 @@
 """Orchestration helpers for campaign-ready substrate preparation."""
 
 from dataclasses import dataclass
-from typing import TypedDict
 
 import ase.io
 import numpy as np
@@ -39,13 +38,6 @@ __all__ = [
 ]
 
 
-class _RelaxationCallKwargs(TypedDict):
-    relaxation_mode: SLAB_RELAXATION_MODE | None
-    relaxation_optimizer: SLAB_RELAXATION_OPTIMIZER | None
-    relaxation_fmax: float | None
-    relaxation_steps: int | None
-
-
 @dataclass(frozen=True)
 class _RelaxationOverrides:
     mode: SLAB_RELAXATION_MODE | None = None
@@ -53,7 +45,7 @@ class _RelaxationOverrides:
     fmax: float | None = None
     steps: int | None = None
 
-    def as_kwargs(self) -> _RelaxationCallKwargs:
+    def as_kwargs(self) -> dict[str, object]:
         return {
             "relaxation_mode": self.mode,
             "relaxation_optimizer": self.optimizer,

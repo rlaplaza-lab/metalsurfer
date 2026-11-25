@@ -27,6 +27,7 @@ from metalsurfer.placement.site_coords import (
     _wrap_cartesian,
     derive_pore_threshold,
     mic_support_positions,
+    periodic_accessibility_tree,
     top_layer_mask_by_normal,
 )
 from metalsurfer.placement.site_enumeration import (
@@ -36,7 +37,6 @@ from metalsurfer.placement.site_enumeration import (
 )
 from metalsurfer.placement.site_np import _hull_signed_distances
 from metalsurfer.placement.site_plugins import resolved_site_generator_name
-from metalsurfer.placement.site_plugins.helpers import periodic_accessibility_tree
 from metalsurfer.placement.site_types import Site, site_kind_from_type_and_supports
 from metalsurfer.placement.site_wall_near_common import wall_near_clearance_window
 from metalsurfer.symmetry import SymmetryAnalysisError

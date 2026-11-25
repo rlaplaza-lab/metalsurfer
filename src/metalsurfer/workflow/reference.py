@@ -17,7 +17,7 @@ from ..optimization import (
 )
 from ..optimization._model import fairchem_backbone
 from ..surface_prep import Substrate
-from .shared import _prepare_atoms_for_calculator
+from .shared import _compute_slab_energy
 
 logger = logging.getLogger(__name__)
 
@@ -105,10 +105,7 @@ def calculate_reference_energies(
     config
         Adsorption configuration.
     """
-    slab_copy = slab.atoms.copy()
-    _prepare_atoms_for_calculator(slab_copy, label="reference slab")
-    slab_copy.calc = calculator
-    slab_energy = slab_copy.get_potential_energy()
+    slab_energy = _compute_slab_energy(slab.atoms, calculator, label="reference slab")
     if not np.isfinite(slab_energy):
         raise OptimizationError(
             f"Clean slab energy is not finite: {slab_energy}. "

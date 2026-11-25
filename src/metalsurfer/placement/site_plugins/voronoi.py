@@ -8,14 +8,16 @@ from typing import Any
 import numpy as np
 
 from .._constants import _ATOP_INJECTION_HEIGHT_FACTOR
-from ..site_coords import project_vertices_to_support_plane
+from ..site_coords import (
+    median_nn_or_fallback,
+    periodic_accessibility_tree,
+    project_vertices_to_support_plane,
+)
 from ..site_voronoi import _generate_slab_topology_sites, _voronoi_sites
 from .base import SiteCandidateBatch, SiteGenerationContext, empty_candidate_batch
 from .helpers import (
     candidate_enrichment_frames,
     inject_atop_sites,
-    median_nn_or_fallback,
-    periodic_accessibility_tree,
     slab_candidate_postprocess,
     slab_top_voronoi_inputs,
 )
@@ -62,8 +64,8 @@ class VoronoiGenerator:
         topology_median_nn: float | None = None
 
         if material_type == "slab":
-            _top_mask, slab_top_atom_indices, voronoi_positions = (
-                slab_top_voronoi_inputs(positions, cell, float(ctx.top_layer_tolerance))
+            _, slab_top_atom_indices, voronoi_positions = slab_top_voronoi_inputs(
+                positions, cell, float(ctx.top_layer_tolerance)
             )
             accessibility_tree = periodic_accessibility_tree(
                 positions,

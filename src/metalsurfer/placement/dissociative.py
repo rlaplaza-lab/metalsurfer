@@ -45,9 +45,11 @@ from .pose.height import (
 from .site_context import SiteContext
 from .site_coords import (
     _mean_covalent_radius,
+    _pbc_pair_min_distances,
     _periodic_image_offsets,
     _slab_normal,
     _wrapped_slab_fractional,
+    mic_nn_distances,
     top_layer_mask_by_normal,
 )
 from .site_enumeration import (
@@ -489,39 +491,11 @@ def _mean_nn_separation_mic(
 ) -> float:
     """Mean nearest-neighbour separation under MIC for slab sites.
 
-    Built from explicit periodic images plus a single KD-tree query instead of a
-    per-site ``ase.geometry.find_mic`` call (which Minkowski-reduces the cell on
-    every call for 2D-periodic slabs). Images are taken from the *original*
-    basis, so heavily skewed, non-reduced cells could in principle disagree with
-    ``find_mic``; this is the same assumption already made by
-    ``_periodic_site_pair_candidates`` and ``site_coords._deduplicate_points``,
-    and ASE-generated slab cells are (near-)reduced.
+    Distances come from :func:`mic_nn_distances`. Images use the original cell
+    basis rather than a Minkowski-reduced one, the same assumption as
+    :func:`site_coords._deduplicate_points`; ASE slab cells are near-reduced.
     """
-    n = len(site_3d)
-    if n < 2:
-        return _DISSOCIATIVE_MAX_ADJACENT_SEP_FLOOR_ANGSTROM
-    pbc_arr = np.asarray(pbc, dtype=bool)
-    cell_arr = np.asarray(cell, dtype=float)
-    # One full cell vector of margin guarantees at least the ±1 image shell on
-    # every periodic axis, which is what the minimum image needs.
-    margin = (
-        float(np.max(np.linalg.norm(cell_arr[pbc_arr], axis=1)))
-        if np.any(pbc_arr)
-        else 0.0
-    )
-    offsets = _periodic_image_offsets(cell_arr, pbc_arr, margin)
-    ext = np.vstack([np.asarray(site_3d, dtype=float) + off for off in offsets])
-    tree = KDTree(ext)
-    # Each site has exactly len(offsets) images of itself in *ext*, so asking for
-    # one more neighbour always leaves at least one genuinely distinct site.
-    k = min(len(ext), len(offsets) + 1)
-    dists, idxs = tree.query(site_3d, k=k)
-    dists = np.atleast_2d(np.asarray(dists, dtype=float))
-    idxs = np.atleast_2d(np.asarray(idxs))
-    # Drop each site's own periodic images: in an elongated cell a self-image can
-    # be closer than the nearest distinct site, so this filter is not optional.
-    valid = (idxs % n) != np.arange(n)[:, None]
-    nn = np.where(valid, dists, np.inf).min(axis=1)
+    nn = mic_nn_distances(site_3d, cell, pbc)
     finite = nn[np.isfinite(nn)]
     if len(finite) == 0:
         return _DISSOCIATIVE_MAX_ADJACENT_SEP_FLOOR_ANGSTROM
@@ -536,45 +510,18 @@ def _periodic_site_pair_candidates(
 ) -> dict[tuple[int, int], float]:
     """Origin-index pairs within *max_sep*, mapped to their minimum-image distance.
 
-    The distance comes straight from the extended image coordinates, so it is the
-    true minimum-image distance for every pair that is kept (pairs further apart
-    than *max_sep* are dropped and never get a distance). Images are enumerated
-    from the *original* basis rather than a Minkowski-reduced one; see
-    :func:`_mean_nn_separation_mic` for the same caveat.
+    Pairs further apart than *max_sep* are dropped. Images are enumerated from
+    the original basis rather than a Minkowski-reduced one; see
+    :func:`_mean_nn_separation_mic`.
     """
     pts = np.asarray(site_3d, dtype=float)
-    n = len(pts)
-    if n < 2:
+    if len(pts) < 2:
         return {}
     pbc_arr = np.asarray(pbc, dtype=bool)
     offsets = _periodic_image_offsets(
         np.asarray(cell, dtype=float), pbc_arr, margin=float(max_sep)
     )
-    # Stacking image-major keeps the origin index at ``idx % n``.
-    ext = np.vstack([pts + off for off in offsets])
-    tree = KDTree(ext)
-    raw_pairs = tree.query_pairs(r=float(max_sep), output_type="ndarray")
-    if len(raw_pairs) == 0:
-        return {}
-    origin_a = raw_pairs[:, 0] % n
-    origin_b = raw_pairs[:, 1] % n
-    keep = origin_a != origin_b
-    if not np.any(keep):
-        return {}
-    origin_a = origin_a[keep]
-    origin_b = origin_b[keep]
-    lo = np.minimum(origin_a, origin_b)
-    hi = np.maximum(origin_a, origin_b)
-    dist = np.linalg.norm(ext[raw_pairs[keep, 0]] - ext[raw_pairs[keep, 1]], axis=1)
-    # Per-key minimum without an n×n buffer: sort by (key, distance) and take the
-    # first entry of each run of equal keys.
-    flat_key = lo.astype(np.int64) * n + hi.astype(np.int64)
-    order = np.lexsort((dist, flat_key))
-    flat_sorted = flat_key[order]
-    first = np.ones(len(flat_sorted), dtype=bool)
-    first[1:] = flat_sorted[1:] != flat_sorted[:-1]
-    sel = order[first]
-    return {(int(lo[s]), int(hi[s])): float(dist[s]) for s in sel}
+    return _pbc_pair_min_distances(pts, max_sep, image_offsets=offsets)
 
 
 def _place_dissociative_two_sites(

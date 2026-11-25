@@ -387,14 +387,12 @@ def _contacts_to_candidates(
             bases.append(base)
             shifts.append(shift)
             img_pos = tree_data[int(img)]
-            d = float(np.linalg.norm(vert - img_pos))
+            delta = vert - img_pos
             if cell_has_volume(cell) and np.any(pbc):
-                d = float(
-                    np.linalg.norm(
-                        _minimum_image_cartesian_delta(vert - img_pos, cell, pbc)
-                    )
-                )
-            supp_dists.append(d - float(framework_radii[base]))
+                delta = _minimum_image_cartesian_delta(delta, cell, pbc)
+            supp_dists.append(
+                float(np.linalg.norm(delta)) - float(framework_radii[base])
+            )
         clearance = float(min(supp_dists)) if supp_dists else 0.0
         if (
             clearance < float(min_clearance) - 1e-9

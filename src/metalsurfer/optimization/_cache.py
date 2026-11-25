@@ -170,6 +170,11 @@ def clear_autobatcher_cache(
         return
     if not (drain_cuda or clear_capacity):
         return
+    _drain_cuda()
+
+
+def _drain_cuda() -> None:
+    """Run ``gc.collect`` and drain the CUDA caching allocator."""
     for _ in range(3):
         gc.collect()
     torch = _deps.torch

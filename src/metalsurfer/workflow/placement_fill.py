@@ -391,7 +391,7 @@ def fill_materialized_placements(
     if effective_target <= 0:
         return MaterializeFillResult([], [], [], [], n_attempts=0)
 
-    pose_cache = build_pose_batch_cache(slab_for_sites, conformers, config)
+    pose_cache = build_pose_batch_cache(slab_for_sites, conformers)
     oversample_max = float(config.placement_retry_oversample_max)
     pool_capacity = capacity_int if config.placement_fill_clamp_to_capacity else None
 

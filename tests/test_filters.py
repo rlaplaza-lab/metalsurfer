@@ -77,6 +77,22 @@ def _sr(atoms, energy_adsorption, placement_id, molecule="test"):
     )
 
 
+def _slab() -> Atoms:
+    """Fresh default reference slab (single Ru layer)."""
+    return make_slab(n_layers=1)
+
+
+def _filter_config(**overrides) -> AdsorptionConfig:
+    """Standard dedup filter config with optional overrides."""
+    params = {
+        "energy_dedup_threshold": 0.05,
+        "rmsd_dedup_threshold": 0.1,
+        "connectivity_multiplier": 1.3,
+    }
+    params.update(overrides)
+    return AdsorptionConfig(**params)
+
+
 # ---------------------------------------------------------------------------
 # test helpers
 # ---------------------------------------------------------------------------
@@ -84,7 +100,7 @@ def _sr(atoms, energy_adsorption, placement_id, molecule="test"):
 
 def _make_alloy_slab():
     """A Ru/Cu alloy slab at z=0 using the shared reference layout."""
-    atoms = make_slab(n_layers=1)
+    atoms = _slab()
     syms = atoms.get_chemical_symbols()
     for i in range(len(syms)):
         if i % 2 == 1:
@@ -193,7 +209,7 @@ def test_coordination_fingerprint_from_mol_ethanol():
 
 
 def test_formula_from_atoms_intact():
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     combined = place_molecule_on_slab(slab, make_water())
     f = _formula_from_atoms(combined, surface_symbols=["Ru"])
     assert f == {"O": 1, "H": 2}
@@ -208,7 +224,7 @@ def test_formula_from_atoms_alloy_surface():
 
 def test_formula_detects_missing_hydrogen():
     """Simulate H migrating away from the molecule."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     water = make_water()
     combined = place_molecule_on_slab(slab, water)
     # remove the last H by keeping only slab + O + one H
@@ -232,14 +248,14 @@ def test_formula_detects_missing_hydrogen():
 
 
 def test_is_connected_intact_water():
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     combined = place_molecule_on_slab(slab, make_water())
     syms, dist, thresh = _nonsurface_graph(combined, ["Ru"], 1.3)
     assert _is_molecule_connected_from_dist(syms, dist, thresh)
 
 
 def test_is_connected_fragmented():
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     slab_z = max(slab.get_positions()[:, 2])
     mol = Atoms(
         "OH2",
@@ -258,7 +274,7 @@ def test_is_connected_fragmented():
 
 def test_is_connected_single_atom():
     """A single non-surface atom is always 'connected'."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     slab_z = max(slab.get_positions()[:, 2])
     mol = Atoms("O", positions=[[5.0, 5.0, slab_z + 3.0]])
     combined = slab + mol
@@ -270,7 +286,7 @@ def test_is_connected_single_atom():
 
 def test_connectivity_multiplier_sensitivity():
     """Tight multiplier can flag structures that a loose one accepts."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     water = make_water()
     combined = place_molecule_on_slab(slab, water)
     # stretch one O-H bond to 1.8x covalent sum
@@ -296,7 +312,7 @@ def test_connectivity_multiplier_sensitivity():
 
 
 def test_bond_counts_intact_ethanol():
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     combined = place_molecule_on_slab(slab, _make_ethanol())
     actual = _bond_counts_from_dist(*_nonsurface_graph(combined, ["Ru"], 1.3))
     ref = _bond_counts_from_mol(_mol_from_smiles("CCO"))
@@ -305,7 +321,7 @@ def test_bond_counts_intact_ethanol():
 
 def test_bond_counts_detect_cc_break():
     """Breaking the C-C bond should change bond counts."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     ethanol = _make_ethanol()
     combined = place_molecule_on_slab(slab, ethanol)
     pos = combined.get_positions().copy()
@@ -327,7 +343,7 @@ def test_bond_counts_detect_cc_break():
 
 
 def test_coordination_fingerprint_intact_ethanol():
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     combined = place_molecule_on_slab(slab, _make_ethanol())
     actual = _coordination_fingerprint_from_dist(
         *_nonsurface_graph(combined, ["Ru"], 1.3)
@@ -343,7 +359,7 @@ def test_coordination_fingerprint_detects_h_shift():
     per-atom coordination changes: C1 goes from 4 to 3, C2 goes from
     3-ish to 4-ish (or vice versa), changing the sorted fingerprint.
     """
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     ethanol = _make_ethanol()
     combined = place_molecule_on_slab(slab, ethanol)
     pos = combined.get_positions().copy()
@@ -373,10 +389,10 @@ def test_coordination_fingerprint_detects_h_shift():
 @pytest.mark.parametrize(
     ("mol_factory", "smiles", "surface_symbols", "multipliers", "slab_factory"),
     [
-        (make_water, "O", ["Ru"], [1.3], lambda: make_slab(n_layers=1)),
-        (_make_ethanol, "CCO", ["Ru"], [1.3], lambda: make_slab(n_layers=1)),
-        (_make_methanol, "CO", ["Ru"], [1.3], lambda: make_slab(n_layers=1)),
-        (_make_acetic_acid, "CC(=O)O", ["Ru"], [1.3], lambda: make_slab(n_layers=1)),
+        (make_water, "O", ["Ru"], [1.3], _slab),
+        (_make_ethanol, "CCO", ["Ru"], [1.3], _slab),
+        (_make_methanol, "CO", ["Ru"], [1.3], _slab),
+        (_make_acetic_acid, "CC(=O)O", ["Ru"], [1.3], _slab),
         (make_water, "O", ["Ru", "Cu"], 1.3, _make_alloy_slab),
     ],
 )
@@ -396,7 +412,7 @@ def test_decomposition_intact(
 
 def test_decomposition_no_smiles_reference():
     """Without reference SMILES, only the fragment check runs."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     combined = place_molecule_on_slab(slab, make_water())
     ok, reason = check_decomposition(
         combined,
@@ -411,7 +427,7 @@ def test_decomposition_no_smiles_reference():
 
 def test_decomposition_unparseable_smiles_fails_closed():
     """Unparseable reference SMILES must reject rather than skip fingerprint checks."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     combined = place_molecule_on_slab(slab, make_water())
     ok, reason = check_decomposition(
         combined,
@@ -430,7 +446,7 @@ def test_decomposition_unparseable_smiles_fails_closed():
 
 
 def test_decomposition_fragmented_water():
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     slab_z = max(slab.get_positions()[:, 2])
     mol = Atoms(
         "OH2",
@@ -455,7 +471,7 @@ def test_decomposition_fragmented_water():
 
 
 def test_decomposition_connectivity_multiplier_applied():
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     combined = place_molecule_on_slab(slab, make_water())
     ok, reason = check_decomposition(
         combined,
@@ -469,7 +485,7 @@ def test_decomposition_connectivity_multiplier_applied():
 
 def _combined_slab_two_waters_far_apart():
     """slab + H2O + H2O (two disconnected intact waters) for saturation-style checks."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     first = place_molecule_on_slab(
         slab, make_water(), z_offset=3.0, x_shift=2.0, y_shift=2.0
     )
@@ -515,7 +531,7 @@ def test_check_decomposition_prefix_ignores_prior_adsorbate():
 
 def test_check_decomposition_prefix_invalid():
     ok, reason = check_decomposition(
-        make_slab(n_layers=1),
+        _slab(),
         reference_smiles="O",
         surface_symbols=["Ru"],
         connectivity_multiplier=1.3,
@@ -558,7 +574,7 @@ def test_decomposition_fragmented_ethanol_two_pieces():
     pattern / coordination fingerprint checks still catch the
     rearrangement.  We only assert the decomposition is detected.
     """
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     ethanol = _make_ethanol()
     combined = place_molecule_on_slab(slab, ethanol)
     pos = combined.get_positions().copy()
@@ -590,7 +606,7 @@ def test_decomposition_fragmented_ethanol_two_pieces():
 
 def test_decomposition_h_loss():
     """One H migrated away and is no longer part of the system."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     water = make_water()
     combined = place_molecule_on_slab(slab, water)
     # remove the last H entirely
@@ -616,7 +632,7 @@ def test_decomposition_h_loss():
 
 def test_decomposition_extra_atom():
     """An extra O appeared among the adsorbate atoms (e.g. surface O migrated)."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     water = make_water()
     combined = place_molecule_on_slab(slab, water)
     slab_z = max(slab.get_positions()[:, 2])
@@ -642,7 +658,7 @@ def test_decomposition_extra_atom():
 
 def test_decomposition_bond_mismatch_wrong_molecule():
     """Bond-count check catches wrong molecule (CC vs CCO)."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     slab_z = max(slab.get_positions()[:, 2])
     r_CC = covalent_radii[atomic_numbers["C"]] + covalent_radii[atomic_numbers["C"]]
     mol = Atoms(
@@ -669,7 +685,7 @@ def test_decomposition_bond_mismatch_wrong_molecule():
 
 def test_decomposition_oh_bond_break():
     """Break the O-H bond in methanol while keeping everything connected via C."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     methanol = _make_methanol()
     combined = place_molecule_on_slab(slab, methanol)
     pos = combined.get_positions().copy()
@@ -704,7 +720,7 @@ def test_decomposition_h_shift_caught_by_coordination():
     coordination fingerprint must change because C1 loses a neighbour
     and C2 gains one.
     """
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     ethanol = _make_ethanol()
     combined = place_molecule_on_slab(slab, ethanol)
     pos = combined.get_positions().copy()
@@ -743,7 +759,7 @@ def test_decomposition_h_shift_caught_by_coordination():
     ],
 )
 def test_desorption_by_height(z_offset, expect_ok, reason_substr):
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     combined = place_molecule_on_slab(slab, make_water(), z_offset=z_offset)
     ok, reason = check_desorption(
         combined, slab, binding_threshold=4.0, material_type="slab"
@@ -759,7 +775,7 @@ def test_desorption_threshold_is_strict_greater_than():
     """Exactly at binding_threshold remains adsorbed; epsilon beyond is desorbed."""
     from metalsurfer.placement import calculate_min_distance
 
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     threshold = 3.0
     # Monoatomic adsorbate directly above a surface atom → MIC min == Δz.
     surface_atom = slab.get_positions()[0]
@@ -805,7 +821,7 @@ def test_desorption_uses_material_pbc_not_calculator_pbc(monkeypatch):
     argument exists precisely to select the right convention and must not be
     ignored.
     """
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     combined = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
 
     captured = {}
@@ -832,7 +848,7 @@ def test_desorption_uses_material_pbc_not_calculator_pbc(monkeypatch):
 
 def test_desorption_uses_relaxed_substrate_positions():
     """Desorption distance must use optimized substrate, not reference slab."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     combined = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
     # The slab atoms are fixed by constraints; clear them so the artificial
     # relaxation below is actually applied to the stored positions.
@@ -855,7 +871,7 @@ def test_desorption_detects_liftoff_without_wrapping_through_vacuum():
     surface is closer to the periodic image below than the 4 A binding
     threshold. Under 3D PBC that structure was reported as "adsorbed".
     """
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     cell = slab.get_cell()
     cell[2, 2] = 18.0
     slab.set_cell(cell)
@@ -871,7 +887,7 @@ def test_desorption_detects_liftoff_without_wrapping_through_vacuum():
 
 
 def test_desorption_no_adsorbate():
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     ok, reason = check_desorption(
         slab, slab, binding_threshold=4.0, material_type="slab"
     )
@@ -881,7 +897,7 @@ def test_desorption_no_adsorbate():
 
 def test_desorption_ignores_pre_adsorbed_atoms_with_surface_prefix():
     """Saturation coverage slabs include prior adsorbates; use bare prefix."""
-    slab_metal = make_slab(n_layers=1, symbol="Ru")
+    slab_metal = _slab()
     x_shift = 5.0
     y_shift = 5.0
     z_offset = 10.0
@@ -970,7 +986,7 @@ def test_desorption_prefix_ignores_shared_symbol_pre_adsorbate():
 
 def test_filter_results_desorption_uses_surface_prefix():
     """filter_results desorption uses surface_prefix_atoms for coverage slabs."""
-    slab_metal = make_slab(n_layers=1, symbol="Ru")
+    slab_metal = _slab()
     x_shift = 5.0
     y_shift = 5.0
     z_offset = 10.0
@@ -1022,7 +1038,7 @@ def test_filter_results_desorption_uses_surface_prefix():
 
 
 def test_duplicate_removal():
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     combined1 = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
     combined2 = combined1.copy()
 
@@ -1030,18 +1046,14 @@ def test_duplicate_removal():
         _sr(combined1, -1.0, 0),
         _sr(combined2, -1.01, 1),
     ]
-    config = AdsorptionConfig(
-        energy_dedup_threshold=0.05,
-        rmsd_dedup_threshold=0.1,
-        connectivity_multiplier=1.3,
-    )
+    config = _filter_config()
     filtered = filter_results(results, slab=slab, config=config, material_type="slab")
     assert len(filtered) == 1
 
 
 def test_duplicate_removal_rejects_mixed_cells():
     """MIC RMSD shares one cell; mixed cells are a contract error."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     combined1 = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
     combined2 = combined1.copy()
     cell2 = np.asarray(combined2.get_cell(), dtype=float).copy()
@@ -1052,17 +1064,13 @@ def test_duplicate_removal_rejects_mixed_cells():
         _sr(combined1, -1.0, 0),
         _sr(combined2, -1.01, 1),
     ]
-    config = AdsorptionConfig(
-        energy_dedup_threshold=0.05,
-        rmsd_dedup_threshold=0.1,
-        connectivity_multiplier=1.3,
-    )
+    config = _filter_config()
     with pytest.raises(ValueError, match="homogeneous cell"):
         filter_results(results, slab=slab, config=config, material_type="slab")
 
 
 def test_duplicate_removal_tracks_removed_duplicates():
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     combined1 = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
     combined2 = combined1.copy()
 
@@ -1070,11 +1078,7 @@ def test_duplicate_removal_tracks_removed_duplicates():
         _sr(combined1, -1.0, 0),
         _sr(combined2, -1.01, 1),
     ]
-    config = AdsorptionConfig(
-        energy_dedup_threshold=0.05,
-        rmsd_dedup_threshold=0.1,
-        connectivity_multiplier=1.3,
-    )
+    config = _filter_config()
     removed: list[ScreeningResult] = []
     filtered = filter_results(
         results,
@@ -1095,7 +1099,7 @@ def test_duplicate_removal_lattice_image_poses():
     Shifting the adsorbate by one cell vector yields an equivalent image under
     periodic boundary conditions; filter_results must report a single unique pose.
     """
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     base = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
     translated = base.copy()
     pos = translated.get_positions().copy()
@@ -1108,18 +1112,14 @@ def test_duplicate_removal_lattice_image_poses():
         _sr(base, -1.0, 0),
         _sr(translated, -1.01, 1),
     ]
-    config = AdsorptionConfig(
-        energy_dedup_threshold=0.05,
-        rmsd_dedup_threshold=0.1,
-        connectivity_multiplier=1.3,
-    )
+    config = _filter_config()
     filtered = filter_results(results, slab=slab, config=config, material_type="slab")
     assert len(filtered) == 1
 
 
 def test_distinct_kept():
     """A translated copy is kept when the adsorption energies differ."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     combined1 = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
     combined2 = combined1.copy()
     pos = combined2.get_positions().copy()
@@ -1131,18 +1131,14 @@ def test_distinct_kept():
         _sr(combined1, -1.0, 0),
         _sr(combined2, -2.0, 1),
     ]
-    config = AdsorptionConfig(
-        energy_dedup_threshold=0.05,
-        rmsd_dedup_threshold=0.1,
-        connectivity_multiplier=1.3,
-    )
+    config = _filter_config()
     filtered = filter_results(results, slab=slab, config=config, material_type="slab")
     assert len(filtered) == 2
 
 
 def test_duplicate_different_energy_kept():
     """Same positions but very different energies -> not duplicates."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     combined1 = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
     combined2 = combined1.copy()
 
@@ -1150,17 +1146,13 @@ def test_duplicate_different_energy_kept():
         _sr(combined1, -1.0, 0),
         _sr(combined2, -3.0, 1),
     ]
-    config = AdsorptionConfig(
-        energy_dedup_threshold=0.05,
-        rmsd_dedup_threshold=0.1,
-        connectivity_multiplier=1.3,
-    )
+    config = _filter_config()
     filtered = filter_results(results, slab=slab, config=config, material_type="slab")
     assert len(filtered) == 2
 
 
 def _slab_with_prior_water() -> tuple[Atoms, Atoms]:
-    slab_metal = make_slab(n_layers=1, symbol="Ru")
+    slab_metal = _slab()
     prior = make_water().copy()
     prior_pos = prior.get_positions().copy()
     prior_pos -= np.mean(prior_pos, axis=0)
@@ -1203,13 +1195,7 @@ def test_duplicate_removal_ignores_prior_adsorbate_geometry():
         _sr(combined1, -1.0, 0),
         _sr(combined2, -1.01, 1),
     ]
-    config = AdsorptionConfig(
-        energy_dedup_threshold=0.05,
-        rmsd_dedup_threshold=0.1,
-        connectivity_multiplier=1.3,
-        skip_topology_check=True,
-        skip_desorption_check=True,
-    )
+    config = _filter_config(skip_topology_check=True, skip_desorption_check=True)
     filtered = filter_results(
         results,
         slab=slab_with_prior,
@@ -1243,13 +1229,7 @@ def test_duplicate_removal_collapses_translated_trailing_adsorbate():
         _sr(_place_new(5.0), -1.0, 0),
         _sr(_place_new(7.0), -1.01, 1),
     ]
-    config = AdsorptionConfig(
-        energy_dedup_threshold=0.05,
-        rmsd_dedup_threshold=0.1,
-        connectivity_multiplier=1.3,
-        skip_topology_check=True,
-        skip_desorption_check=True,
-    )
+    config = _filter_config(skip_topology_check=True, skip_desorption_check=True)
     filtered = filter_results(
         results,
         slab=slab_with_prior,
@@ -1285,13 +1265,7 @@ def test_duplicate_removal_keeps_rotated_trailing_pose_with_same_prior():
         _sr(_place_new(turn=False), -1.0, 0),
         _sr(_place_new(turn=True), -1.01, 1),
     ]
-    config = AdsorptionConfig(
-        energy_dedup_threshold=0.05,
-        rmsd_dedup_threshold=0.1,
-        connectivity_multiplier=1.3,
-        skip_topology_check=True,
-        skip_desorption_check=True,
-    )
+    config = _filter_config(skip_topology_check=True, skip_desorption_check=True)
     filtered = filter_results(
         results,
         slab=slab_with_prior,
@@ -1303,7 +1277,7 @@ def test_duplicate_removal_keeps_rotated_trailing_pose_with_same_prior():
 
 def test_duplicate_removal_across_adjacent_com_bins():
     """A sub-threshold rigid shift of the same pose still collapses."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     base = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
     shifted = base.copy()
     pos = shifted.get_positions().copy()
@@ -1314,20 +1288,14 @@ def test_duplicate_removal_across_adjacent_com_bins():
         _sr(base, -1.0, 0),
         _sr(shifted, -1.01, 1),
     ]
-    config = AdsorptionConfig(
-        energy_dedup_threshold=0.05,
-        rmsd_dedup_threshold=0.1,
-        connectivity_multiplier=1.3,
-        skip_topology_check=True,
-        skip_desorption_check=True,
-    )
+    config = _filter_config(skip_topology_check=True, skip_desorption_check=True)
     filtered = filter_results(results, slab=slab, config=config, material_type="slab")
     assert len(filtered) == 1
 
 
 def test_duplicate_removal_collapses_same_pose_on_distant_sites():
     """The same local pose on other terrace sites is one structure."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     placements = []
     for i, x in enumerate((1.0, 4.0, 7.0, 10.0)):
         atoms = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
@@ -1336,13 +1304,7 @@ def test_duplicate_removal_collapses_same_pose_on_distant_sites():
         atoms.set_positions(pos)
         placements.append(_sr(atoms, -1.0 - 0.001 * i, i))
 
-    config = AdsorptionConfig(
-        energy_dedup_threshold=0.05,
-        rmsd_dedup_threshold=0.1,
-        connectivity_multiplier=1.3,
-        skip_topology_check=True,
-        skip_desorption_check=True,
-    )
+    config = _filter_config(skip_topology_check=True, skip_desorption_check=True)
     filtered = filter_results(
         placements, slab=slab, config=config, material_type="slab"
     )
@@ -1352,7 +1314,7 @@ def test_duplicate_removal_collapses_same_pose_on_distant_sites():
 
 def test_duplicate_removal_across_periodic_cell_face():
     """Near-dups whose COMs sit on opposite periodic faces still collapse."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     cell = np.asarray(slab.get_cell(), dtype=float)
     a_len = float(np.linalg.norm(cell[0]))
 
@@ -1374,13 +1336,7 @@ def test_duplicate_removal_across_periodic_cell_face():
         _sr(base, -1.0, 0),
         _sr(near, -1.01, 1),
     ]
-    config = AdsorptionConfig(
-        energy_dedup_threshold=0.05,
-        rmsd_dedup_threshold=0.1,
-        connectivity_multiplier=1.3,
-        skip_topology_check=True,
-        skip_desorption_check=True,
-    )
+    config = _filter_config(skip_topology_check=True, skip_desorption_check=True)
     filtered = filter_results(results, slab=slab, config=config, material_type="slab")
     assert len(filtered) == 1
 
@@ -1391,7 +1347,7 @@ def test_duplicate_removal_collapses_wrapped_periodic_image():
     The copy is shifted by one cell vector plus one terrace spacing, then
     folded back with ``Atoms.wrap`` the way a relaxed geometry is stored.
     """
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     cell = np.asarray(slab.get_cell(), dtype=float)
     a_len = float(np.linalg.norm(cell[0]))
     terrace = a_len / 4.0
@@ -1419,13 +1375,7 @@ def test_duplicate_removal_collapses_wrapped_periodic_image():
         _sr(base, -1.0, 0),
         _sr(moved, -1.01, 1),
     ]
-    config = AdsorptionConfig(
-        energy_dedup_threshold=0.05,
-        rmsd_dedup_threshold=0.1,
-        connectivity_multiplier=1.3,
-        skip_topology_check=True,
-        skip_desorption_check=True,
-    )
+    config = _filter_config(skip_topology_check=True, skip_desorption_check=True)
     filtered = filter_results(results, slab=slab, config=config, material_type="slab")
     assert len(filtered) == 1
     assert filtered[0].placement_id == 1
@@ -1437,7 +1387,7 @@ def test_assignment_rmsd_collapses_permuted_long_translation():
     MIC of the centroid difference wraps that shift toward zero and used to
     leave the unwrapped coordinates a cell apart.
     """
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     base = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
     moved = base.copy()
     pos = moved.get_positions().copy()
@@ -1458,13 +1408,7 @@ def test_assignment_rmsd_collapses_permuted_long_translation():
         _sr(base, -1.0, 0),
         _sr(moved, -1.01, 1),
     ]
-    config = AdsorptionConfig(
-        energy_dedup_threshold=0.05,
-        rmsd_dedup_threshold=0.1,
-        connectivity_multiplier=1.3,
-        skip_topology_check=True,
-        skip_desorption_check=True,
-    )
+    config = _filter_config(skip_topology_check=True, skip_desorption_check=True)
     filtered = filter_results(results, slab=slab, config=config, material_type="slab")
     assert len(filtered) == 1
     assert filtered[0].placement_id == 1
@@ -1472,7 +1416,7 @@ def test_assignment_rmsd_collapses_permuted_long_translation():
 
 def test_default_rmsd_threshold_collapses_a_mild_distortion():
     """Default 0.35 Å treats a ~0.2 Å heavy-atom change as the same pose."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     base = place_molecule_on_slab(slab, _make_ethanol(), z_offset=2.5)
     distorted = base.copy()
     pos = distorted.get_positions().copy()
@@ -1501,13 +1445,7 @@ def test_default_rmsd_threshold_collapses_a_mild_distortion():
         len(filter_results(near, slab=slab, config=default, material_type="slab")) == 1
     )
 
-    strict = AdsorptionConfig(
-        energy_dedup_threshold=0.05,
-        rmsd_dedup_threshold=0.1,
-        connectivity_multiplier=1.3,
-        skip_topology_check=True,
-        skip_desorption_check=True,
-    )
+    strict = _filter_config(skip_topology_check=True, skip_desorption_check=True)
     assert (
         len(filter_results(near, slab=slab, config=strict, material_type="slab")) == 2
     )
@@ -1515,7 +1453,7 @@ def test_default_rmsd_threshold_collapses_a_mild_distortion():
 
 def test_duplicate_removal_collapses_swapped_identical_hydrogens():
     """Same geometry with the two H indices exchanged is one structure."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     base = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
     swapped = base.copy()
     pos = swapped.get_positions().copy()
@@ -1534,13 +1472,7 @@ def test_duplicate_removal_collapses_swapped_identical_hydrogens():
         _sr(base, -1.0, 0),
         _sr(swapped, -1.01, 1),
     ]
-    config = AdsorptionConfig(
-        energy_dedup_threshold=0.05,
-        rmsd_dedup_threshold=0.1,
-        connectivity_multiplier=1.3,
-        skip_topology_check=True,
-        skip_desorption_check=True,
-    )
+    config = _filter_config(skip_topology_check=True, skip_desorption_check=True)
     filtered = filter_results(results, slab=slab, config=config, material_type="slab")
     assert len(filtered) == 1
     assert filtered[0].placement_id == 1
@@ -1548,7 +1480,7 @@ def test_duplicate_removal_collapses_swapped_identical_hydrogens():
 
 def test_duplicate_removal_keeps_in_plane_rotation():
     """A 90° turn that moves atoms is a different structure (no Kabsch)."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     base = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
     rotated = base.copy()
     pos = rotated.get_positions().copy()
@@ -1571,13 +1503,7 @@ def test_duplicate_removal_keeps_in_plane_rotation():
         _sr(base, -1.0, 0),
         _sr(rotated, -1.01, 1),
     ]
-    config = AdsorptionConfig(
-        energy_dedup_threshold=0.05,
-        rmsd_dedup_threshold=0.1,
-        connectivity_multiplier=1.3,
-        skip_topology_check=True,
-        skip_desorption_check=True,
-    )
+    config = _filter_config(skip_topology_check=True, skip_desorption_check=True)
     filtered = filter_results(results, slab=slab, config=config, material_type="slab")
     assert len(filtered) == 2
 
@@ -1589,7 +1515,7 @@ def test_duplicate_removal_keeps_in_plane_rotation():
 
 def test_filter_pipeline_removes_decomposed_and_desorbed():
     """Unified filter drops both decomposed and desorbed."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     good = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
     slab_z = max(slab.get_positions()[:, 2])
     decomposed_mol = Atoms(
@@ -1625,7 +1551,7 @@ def test_filter_pipeline_removes_decomposed_and_desorbed():
 def test_filter_pipeline_catches_rearranged():
     """Pipeline must reject rearranged molecules (H-shift), not just
     fragmented ones."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     good = place_molecule_on_slab(slab, _make_ethanol(), z_offset=2.5)
 
     rearranged_ethanol = _make_ethanol()
@@ -1655,7 +1581,7 @@ def test_filter_pipeline_catches_rearranged():
 
 def test_filter_pipeline_catches_atom_loss():
     """A molecule that lost an H is a slab-prefix contract violation."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     good = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
 
     water = make_water()
@@ -1686,7 +1612,7 @@ def test_filter_pipeline_catches_atom_loss():
 
 
 def test_filter_pipeline_empty_input():
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     filtered = filter_results(
         [], slab=slab, config=AdsorptionConfig(), material_type="slab"
     )
@@ -1695,7 +1621,7 @@ def test_filter_pipeline_empty_input():
 
 def test_filter_pipeline_all_rejected():
     """When every result is bad, return an empty list."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     decomposed_mol = Atoms(
         "OH2",
         positions=[
@@ -1722,7 +1648,7 @@ def test_filter_pipeline_all_rejected():
 
 def test_filter_pipeline_skip_topology_check_allows_decomposed():
     """When skip_topology_check=True, decomposed structures pass through."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     good = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
     slab_z = max(slab.get_positions()[:, 2])
     decomposed_mol = Atoms(
@@ -1755,7 +1681,7 @@ def test_filter_pipeline_skip_topology_check_allows_decomposed():
 
 def test_filter_pipeline_skip_desorption_check_allows_desorbed():
     """When skip_desorption_check=True, desorbed structures pass through."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     good = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
     desorbed = place_molecule_on_slab(slab, make_water(), z_offset=10.0)
 
@@ -1804,7 +1730,7 @@ def test_filter_pipeline_alloy_surface():
 
 def test_connected_molecule_across_pbc():
     """A molecule straddling the periodic boundary must not be flagged decomposed."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     mol = make_water()
     pos = mol.get_positions().copy()
     pos -= np.mean(pos, axis=0)
@@ -1843,7 +1769,7 @@ def test_filters_mic_distances_use_left_handed_cells():
 
 def test_decomposition_uses_material_pbc_not_calculator_pbc(monkeypatch):
     """Decomposition connectivity must use material PBC, not calculator TTT."""
-    slab = make_slab(n_layers=1)
+    slab = _slab()
     combined = place_molecule_on_slab(slab, make_water(), z_offset=2.5)
     combined.set_pbc(calculator_pbc_for_atoms(combined))
     assert list(combined.get_pbc()) == [True, True, True]

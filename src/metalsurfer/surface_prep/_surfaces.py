@@ -966,7 +966,7 @@ def substitute_alloy(
         variant.set_chemical_symbols(syms)
         variants.append(variant)
 
-    best_energy, best_atoms, ranking_failure = _rank_alloy_variants(
+    _, best_atoms, ranking_failure = _rank_alloy_variants(
         variants, calculator=calculator
     )
 
@@ -1158,7 +1158,6 @@ def deposit_adatoms(
     best_atoms = None
 
     pbc = list(material_aware_pbc(slab.material_type))
-    cell = np.asarray(base.get_cell(), dtype=float)
     image_offsets = _periodic_image_offsets(
         cell, np.asarray(pbc, dtype=bool), min_adatom_separation
     )

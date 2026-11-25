@@ -8,15 +8,17 @@ from typing import Any
 import numpy as np
 
 from .._constants import _ATOP_INJECTION_HEIGHT_FACTOR
-from ..site_coords import exposed_lower_band_indices
+from ..site_coords import (
+    exposed_lower_band_indices,
+    median_nn_or_fallback,
+    periodic_accessibility_tree,
+)
 from ..site_voronoi import _generate_slab_topology_sites, _voronoi_sites
 from .base import SiteCandidateBatch, SiteGenerationContext
 from .helpers import (
     PlanarWidenScratch,
     candidate_enrichment_frames,
-    median_nn_or_fallback,
     merge_dedup_site_arrays,
-    periodic_accessibility_tree,
     slab_candidate_postprocess,
     slab_top_voronoi_inputs,
     top_layer_is_planar_from_arrays,
@@ -103,7 +105,7 @@ class TopologySlabGenerator:
             cell=cell,
             pbc=pbc,
         )
-        topology_median_nn = float(median_nn)
+        topology_median_nn = median_nn
         site_height = _ATOP_INJECTION_HEIGHT_FACTOR * median_nn
         (
             topo_vertices,
@@ -141,20 +143,26 @@ class TopologySlabGenerator:
             exp_tri=topology_expanded_tri,
         )
         has_topology_atop = any(s == "topology_atop" for s in topo_sources)
+
         if len(topo_vertices) > 0:
-            vertices, nn_dists, source_hints, atom_indices, _, _ = (
-                merge_dedup_site_arrays(
-                    vertices,
-                    nn_dists,
-                    source_hints,
-                    topo_vertices,
-                    topo_dists,
-                    topo_sources,
-                    cell=cell,
-                    pbc=pbc,
-                    atom_indices=atom_indices,
-                    new_atom_indices=topo_atoms,
-                )
+            (
+                vertices,
+                nn_dists,
+                source_hints,
+                atom_indices,
+                _,
+                _,
+            ) = merge_dedup_site_arrays(
+                vertices,
+                nn_dists,
+                source_hints,
+                topo_vertices,
+                topo_dists,
+                topo_sources,
+                cell=cell,
+                pbc=pbc,
+                atom_indices=atom_indices,
+                new_atom_indices=topo_atoms,
             )
 
         normals: np.ndarray | None

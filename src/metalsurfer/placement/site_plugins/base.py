@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 import numpy as np
 
 from ..._numeric_defaults import DEFAULT_N_JOBS
+from ...config import validate_site_generator_for_material
 from ...site_plugin_ids import (
     AUTO_SITE_GENERATOR_DEFAULTS,
     PLUGIN_ALLOWED_MATERIALS,
@@ -123,13 +124,7 @@ def resolved_site_generator_name(name: str, material_type: str) -> str:
             f"Unknown site_generator {name!r}; "
             f"expected one of {('auto',) + SITE_GENERATORS}"
         )
-    allowed = PLUGIN_ALLOWED_MATERIALS[name]
-    if material_type not in allowed:
-        raise ValueError(
-            f"site_generator={name!r} is incompatible with "
-            f"material_type={material_type!r}; allowed materials: "
-            f"{sorted(allowed)}"
-        )
+    validate_site_generator_for_material(name, material_type)
     return name
 
 

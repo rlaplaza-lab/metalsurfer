@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import numpy as np
 from ase import Atoms
-from scipy.spatial import KDTree
 
 from .._utils import cell_has_volume
 from ._constants import (
@@ -22,12 +21,12 @@ from ._material import material_aware_pbc
 from .geometry import framework_radii_from_symbols, tangent_basis_from_normal
 from .site_classify import site_env_fingerprint
 from .site_coords import (
-    _build_periodic_images,
-    _minimum_image_cartesian_delta,
+    _periodic_delta,
     _slab_outward_normal,
+    median_nn_or_fallback,
+    periodic_accessibility_tree,
     ray_exposure_mask,
 )
-from .site_plugins.helpers import median_nn_or_fallback
 from .site_types import Site
 
 _LIGAND_ATOP_SOURCE = "ligand_atop"
@@ -44,30 +43,6 @@ def _unit(vec: np.ndarray, fallback: np.ndarray) -> np.ndarray:
             return np.array([0.0, 0.0, 1.0], dtype=float)
         return fb / fb_nrm
     return arr / nrm
-
-
-def _mic_delta(
-    a: np.ndarray,
-    b: np.ndarray,
-    cell: np.ndarray,
-    pbc: np.ndarray,
-) -> np.ndarray:
-    delta = np.asarray(a, dtype=float) - np.asarray(b, dtype=float)
-    if np.any(pbc):
-        return _minimum_image_cartesian_delta(delta, cell, pbc)
-    return delta
-
-
-def _substrate_query_tree(
-    sub_pos: np.ndarray,
-    cell: np.ndarray,
-    pbc: np.ndarray,
-    margin: float,
-) -> KDTree:
-    """Substrate KDTree, with periodic images when *pbc* is on."""
-    if np.any(pbc) and cell_has_volume(cell):
-        return KDTree(_build_periodic_images(sub_pos, cell, pbc, margin=margin))
-    return KDTree(sub_pos)
 
 
 def ligand_local_sites(
@@ -97,7 +72,7 @@ def ligand_local_sites(
     margin = float(max_bond)
     if cell_has_volume(cell):
         margin = max(margin, float(np.max(np.linalg.norm(cell, axis=1))))
-    sub_tree = _substrate_query_tree(sub_pos, cell, pbc, margin)
+    sub_tree = periodic_accessibility_tree(sub_pos, cell, pbc, margin)
     _, nearest_hits = sub_tree.query(positions[lig_idx], k=1)
     nearest_j = np.asarray(nearest_hits, dtype=int).ravel() % n_sub
     fallback = (
@@ -108,7 +83,7 @@ def ligand_local_sites(
     normals = np.vstack(
         [
             _unit(
-                _mic_delta(positions[int(ai)], sub_pos[int(j)], cell, pbc),
+                _periodic_delta(positions[int(ai)] - sub_pos[int(j)], cell, pbc),
                 fallback,
             )
             for ai, j in zip(lig_idx, nearest_j, strict=True)
@@ -151,7 +126,7 @@ def ligand_local_sites(
             if j in seen:
                 continue
             seen.add(j)
-            delta = _mic_delta(atom_pos, sub_pos[int(j)], cell, pbc)
+            delta = _periodic_delta(atom_pos - sub_pos[int(j)], cell, pbc)
             dist = float(np.linalg.norm(delta))
             if dist < min_bond or dist > max_bond:
                 continue
@@ -211,7 +186,7 @@ def drop_sites_near_catalog(
         xyz = np.asarray(site.xyz, dtype=float)
         too_close = False
         for anchor in anchors:
-            delta = _mic_delta(xyz, anchor, cell, pbc)
+            delta = _periodic_delta(xyz - anchor, cell, pbc)
             if float(np.linalg.norm(delta)) <= float(tolerance):
                 too_close = True
                 break
