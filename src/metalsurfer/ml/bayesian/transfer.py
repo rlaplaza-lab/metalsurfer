@@ -15,6 +15,8 @@ from sklearn.preprocessing import StandardScaler
 
 from ..._numeric_defaults import (
     BO_TRANSFER_MIN_SIMILARITY_DEFAULT,
+    BO_TRANSFER_TRUST_PATIENCE_DEFAULT,
+    BO_TRANSFER_WEIGHT_CAP_DEFAULT,
     DEFAULT_N_JOBS,
     DEFAULT_SEED,
 )
@@ -615,12 +617,12 @@ def build_transfer_surrogate(
     surrogate: TransferCapableSurrogateType = "random_forest",
     n_estimators: int = 100,
     random_state: int = DEFAULT_SEED,
-    weight_cap: float = 0.35,
+    weight_cap: float = BO_TRANSFER_WEIGHT_CAP_DEFAULT,
     similarity_lengthscale: float = 1.0,
     min_similarity: float = BO_TRANSFER_MIN_SIMILARITY_DEFAULT,
     mae_tolerance: float = 0.0,
     transfer_bad_rounds: int = 0,
-    trust_patience: int = 2,
+    trust_patience: int = BO_TRANSFER_TRUST_PATIENCE_DEFAULT,
     proximity_lengthscale: float | None = None,
     prior_step_ages: list[int] | None = None,
     recency_lengthscale: float | None = None,
@@ -709,7 +711,7 @@ def build_cumulative_refit_surrogate(
     proximity_floor: float = 0.05,
     mae_tolerance: float = 0.0,
     transfer_bad_rounds: int = 0,
-    trust_patience: int = 2,
+    trust_patience: int = BO_TRANSFER_TRUST_PATIENCE_DEFAULT,
     n_jobs: int = DEFAULT_N_JOBS,
 ) -> TransferSurrogateResult:
     """Proximity-weighted cumulative refit with the shared OOF trust gate.

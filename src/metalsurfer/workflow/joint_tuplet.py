@@ -665,12 +665,19 @@ def _assemble_bo_joint_groups_from_specs(
         else:
             positions = catalog
 
+        def _positions_at(
+            _current: Sequence[ScreeningResult],
+            _chosen: Sequence[int],
+            sites: Mapping[int, np.ndarray] = positions,
+        ) -> Mapping[int, np.ndarray]:
+            return sites
+
         group, chosen, count_phase = _grow_packed_group(
             group,
             candidates,
             pose_at=_pose_at,
             site_at=_site_at,
-            positions_at=lambda _current, _chosen, sites=positions: sites,
+            positions_at=_positions_at,
             slab_atoms=slab.atoms,
             config=config,
             material_type=slab.material_type,

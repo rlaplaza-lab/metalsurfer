@@ -356,11 +356,8 @@ def _contacts_to_candidates(
         return []
     n_atoms = len(positions)
     tree_data = np.asarray(tree.data, dtype=float)
-    cell_inv = (
-        np.linalg.inv(np.asarray(cell, dtype=float))
-        if np.any(pbc) and cell_has_volume(cell)
-        else None
-    )
+    periodic = bool(np.any(pbc) and cell_has_volume(cell))
+    cell_inv = np.linalg.inv(np.asarray(cell, dtype=float)) if periodic else None
     out: list[CandidateSite] = []
     seen: set[
         tuple[tuple[int, ...], tuple[tuple[int, int, int], ...], tuple[float, ...]]
@@ -370,6 +367,7 @@ def _contacts_to_candidates(
             np.asarray(contact.position, dtype=float).reshape(1, 3),
             cell,
             pbc,
+            inv_cell=cell_inv,
         )[0]
         bases: list[int] = []
         shifts: list[tuple[int, int, int]] = []
@@ -388,8 +386,10 @@ def _contacts_to_candidates(
             shifts.append(shift)
             img_pos = tree_data[int(img)]
             delta = vert - img_pos
-            if cell_has_volume(cell) and np.any(pbc):
-                delta = _minimum_image_cartesian_delta(delta, cell, pbc)
+            if periodic:
+                delta = _minimum_image_cartesian_delta(
+                    delta, cell, pbc, inv_cell=cell_inv
+                )
             supp_dists.append(
                 float(np.linalg.norm(delta)) - float(framework_radii[base])
             )
@@ -418,13 +418,10 @@ def _contacts_to_candidates(
         )
         anchor = project_anchor_to_support_plane(vert, normal, supp_pos)
         nrm = float(np.linalg.norm(np.asarray(normal, dtype=float)))
-        if (
-            nrm > _VECTOR_NORM_EPS
-            and len(supp_pos) > 0
-            and np.any(pbc)
-            and cell_has_volume(cell)
-        ):
-            anchor = _wrap_cartesian(anchor.reshape(1, 3), cell, pbc)[0]
+        if nrm > _VECTOR_NORM_EPS and len(supp_pos) > 0 and periodic:
+            anchor = _wrap_cartesian(
+                anchor.reshape(1, 3), cell, pbc, inv_cell=cell_inv
+            )[0]
         out.append(
             CandidateSite(
                 position=np.asarray(anchor, dtype=float).copy(),

@@ -495,7 +495,7 @@ def _mean_nn_separation_mic(
     basis rather than a Minkowski-reduced one, the same assumption as
     :func:`site_coords._deduplicate_points`; ASE slab cells are near-reduced.
     """
-    nn = mic_nn_distances(site_3d, cell, pbc)
+    nn = mic_nn_distances(site_3d, cell, np.asarray(pbc, dtype=bool))
     finite = nn[np.isfinite(nn)]
     if len(finite) == 0:
         return _DISSOCIATIVE_MAX_ADJACENT_SEP_FLOOR_ANGSTROM

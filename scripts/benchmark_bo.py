@@ -50,7 +50,6 @@ from metalsurfer.ml.bayesian import (
 from metalsurfer.ml.features import FEATURE_NAMES, extract_features_from_dataset
 from metalsurfer.models import BOStepMemory, windowed_bo_step_memories
 
-configure_logging(default_level="INFO")
 logger = logging.getLogger(__name__)
 
 DEFAULT_DATA_DIR = "results_bipyridine_au111_defects_saturation_raw"
@@ -1617,6 +1616,7 @@ def run_benchmark(
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_logging(default_level="INFO")
     parser = argparse.ArgumentParser(
         description="Offline replay of metalsurfer BO defaults on a saturation pool.",
     )

@@ -31,9 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Shared numeric defaults live in ``metalsurfer._numeric_defaults``:
   ``BINDING_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM``,
   ``MIN_PBC_IMAGE_SEPARATION_DEFAULT_ANGSTROM``,
-  ``BO_TRANSFER_MIN_SIMILARITY_DEFAULT``, ``RMSD_DEDUP_THRESHOLD_DEFAULT_ANGSTROM``,
+  ``BO_TRANSFER_MIN_SIMILARITY_DEFAULT``,
+  ``BO_TRANSFER_WEIGHT_CAP_DEFAULT``, ``BO_TRANSFER_TRUST_PATIENCE_DEFAULT``,
+  ``ADAPTIVE_GRID_DEFAULT_SPACING``, ``ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS``,
+  ``ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE``,
+  ``AUTOBATCHER_MAX_MEMORY_PADDING_DEFAULT``,
+  ``SATURATION_AUTOBATCHER_REUSE_GROWTH_ATOMS``,
+  ``SATURATION_AUTOBATCHER_REUSE_GROWTH_FRACTION``,
+  ``RMSD_DEDUP_THRESHOLD_DEFAULT_ANGSTROM``,
   ``ENERGY_DEDUP_THRESHOLD_DEFAULT_EV``, and ``DEFAULT_SLAB_TOP_VACUUM_ANG``.
   Config fields and helper kwarg defaults share one value per knob.
+  Cumulative-refit ``weight_cap`` stays ``0.5``.
 - An empty adsorption campaign worklist emits a ``UserWarning`` only.
   Saturation still logs the same message with ``logger.warning``.
 - Unknown campaign ``config:`` keys are reported together in one error, each
@@ -61,6 +69,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- ``run_saturation`` and ``run_saturation_bo`` docs require ``config``.
+  ``surface_type`` still defaults to ``"manual"``.
+- BO pool capacity is the ``workflow.shared`` binding of
+  ``estimate_placement_spec_capacity``. Quick-suite patches follow that call.
+- The MLIP setuptools pin is ``>=65,<81`` (81 dropped ``pkg_resources``),
+  including CPU MLIP CI and the Kaggle runner. The coverage gate is
+  ``fail_under`` in ``.coveragerc``.
 - Slab MIC vectors in ``placement.geometry._mol_slab_pairwise_mic`` come from
   the shared ``minimum_image_cartesian_delta`` instead of a local
   ``ase.geometry.find_mic`` call, so all catalog MIC math shares one helper.

@@ -71,6 +71,10 @@ results_test_ethene/
 results_*/
 results*/
 examples/*/
+# Vendored MOF example input. The directory ignore above would hide it.
+!examples/mof_structures/
+examples/mof_structures/*
+!examples/mof_structures/RUBTAK01.cif
 probe_*/
 *.xyz
 !scripts/tutorials/*.xyz

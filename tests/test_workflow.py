@@ -538,7 +538,7 @@ class TestProcessMolecule:
                 mock_conformers,
             ),
             patch(
-                "metalsurfer.workflow.bayesian.estimate_placement_spec_capacity",
+                "metalsurfer.workflow.shared.estimate_placement_spec_capacity",
                 mock_capacity,
             ),
             patch(
@@ -625,7 +625,7 @@ class TestProcessMolecule:
                 mock_conformers,
             ),
             patch(
-                "metalsurfer.workflow.bayesian.estimate_placement_spec_capacity",
+                "metalsurfer.workflow.shared.estimate_placement_spec_capacity",
                 mock_capacity,
             ),
             patch(
@@ -724,7 +724,7 @@ class TestProcessMolecule:
                 MagicMock(return_value=([Atoms("H")], [0.0])),
             ),
             patch(
-                "metalsurfer.workflow.bayesian.estimate_placement_spec_capacity",
+                "metalsurfer.workflow.shared.estimate_placement_spec_capacity",
                 MagicMock(return_value=2),
             ),
             patch(
@@ -865,7 +865,7 @@ def test_bo_batches_reuse_upfront_capacity_for_clamping(monkeypatch, clamp_enabl
         MagicMock(return_value=([Atoms("H")], [0.0])),
     )
     monkeypatch.setattr(
-        "metalsurfer.workflow.bayesian.estimate_placement_spec_capacity",
+        "metalsurfer.workflow.shared.estimate_placement_spec_capacity",
         estimate_bo_capacity,
     )
     monkeypatch.setattr(

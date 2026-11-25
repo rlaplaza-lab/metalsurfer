@@ -32,11 +32,7 @@ from metalsurfer import configure_logging
 from metalsurfer.config import AdsorptionConfig, BOConfig
 from metalsurfer.models import BOStepMemory, windowed_bo_step_memories
 
-configure_logging(default_level="INFO")
 logger = logging.getLogger(__name__)
-# Keep sweep progress readable; per-fit surrogate logs are too chatty.
-logging.getLogger("metalsurfer.ml.bayesian").setLevel(logging.WARNING)
-logging.getLogger("metalsurfer.ml.features").setLevel(logging.WARNING)
 
 DEFAULT_DATA_DIR = bb.DEFAULT_DATA_DIR
 DEFAULT_SEEDS = 10
@@ -688,6 +684,10 @@ def _top_wave_combos(xfer_summary: pd.DataFrame, *, k: int = 4) -> list[dict[str
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_logging(default_level="INFO")
+    # Keep sweep progress readable; per-fit surrogate logs are too chatty.
+    logging.getLogger("metalsurfer.ml.bayesian").setLevel(logging.WARNING)
+    logging.getLogger("metalsurfer.ml.features").setLevel(logging.WARNING)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
     parser.add_argument("--seeds", type=int, default=DEFAULT_SEEDS)

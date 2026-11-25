@@ -139,8 +139,9 @@ Kaggle GPU CI
 -------------
 
 The ``Kaggle GPU tests`` workflow uploads a private source dataset
-(configured via repository variables, not hardcoded here), launches a private
-T4 script kernel, and scrapes the log. Defaults:
+``rlaplaza/metalsurfercisrc``, hardcoded in ``.github/workflows/kaggle-gpu.yml``
+and ``.github/scripts/kaggle_gpu_runner.template.py``. It launches a private
+T4 script kernel and scrapes the log. Defaults:
 
 - **smoke** (cron + dispatch default): ``gpu_smoke`` via ``run_gpu_tests.sh``
 - **full** (manual): entire GPU suite with VRAM-isolated phases
@@ -174,8 +175,8 @@ Fixing failures
 - **Ruff:** run ``ruff check . --fix`` for auto-fixable rules, then ``ruff format .``.
 - **Mypy:** read the error code (e.g. ``[arg-type]``) and fix the annotation or add a
   targeted ignore only when third-party stubs are missing.
-- **Coverage:** the gate is ``--fail-under=85`` on ``src/metalsurfer``; add tests for
-   new branches rather than lowering the threshold.
+- **Coverage:** the gate is ``fail_under`` in ``.coveragerc`` on ``src/metalsurfer``;
+  add tests for new branches rather than lowering the threshold.
 
 Publishing
 ----------

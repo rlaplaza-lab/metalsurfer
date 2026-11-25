@@ -86,7 +86,8 @@ def _dependency_error_for_slab_import(exc: ImportError) -> DependencyMissingErro
             return DependencyMissingError(
                 "setuptools",
                 "create_slab_from_bulk",
-                "Install with: pip install 'setuptools<82' (setuptools 82+ removed pkg_resources)",
+                "Install with: pip install 'setuptools>=65,<81' "
+                "(setuptools 81+ removed pkg_resources)",
             )
         cur = cur.__cause__
     extra = f". Underlying error: {exc!s}" if "fairchem" not in str(exc).lower() else ""

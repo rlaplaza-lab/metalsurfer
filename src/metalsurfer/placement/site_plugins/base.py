@@ -13,7 +13,10 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import numpy as np
 
-from ..._numeric_defaults import DEFAULT_N_JOBS
+from ..._numeric_defaults import (
+    ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS,
+    DEFAULT_N_JOBS,
+)
 from ...config import validate_site_generator_for_material
 from ...site_plugin_ids import (
     AUTO_SITE_GENERATOR_DEFAULTS,
@@ -81,7 +84,7 @@ class SiteGenerationContext:
     enrich: bool
     planar_z_variance_threshold: float
     adaptive_grid_spacing: float | None = None
-    adaptive_grid_refine_levels: int = 0
+    adaptive_grid_refine_levels: int = ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS
     adaptive_grid_nms_framework_scale: float | None = None
     n_jobs: int = DEFAULT_N_JOBS
     side_policy: Literal["all", "positive", "negative", "external"] = "positive"

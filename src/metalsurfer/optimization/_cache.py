@@ -37,6 +37,11 @@ import threading
 from dataclasses import dataclass
 from typing import Any
 
+from .._numeric_defaults import (
+    AUTOBATCHER_MAX_MEMORY_PADDING_DEFAULT,
+    SATURATION_AUTOBATCHER_REUSE_GROWTH_ATOMS,
+    SATURATION_AUTOBATCHER_REUSE_GROWTH_FRACTION,
+)
 from ..config import AdsorptionConfig
 from ..exceptions import DependencyMissingError
 from . import _deps
@@ -63,8 +68,8 @@ class ParallelCapacity:
 
 # Fallback growth bounds when a saturation autobatcher is reused for a slightly
 # larger neighbour. Overridable via AdsorptionConfig.
-_SATURATION_REUSE_GROWTH_ATOMS = 32
-_SATURATION_REUSE_GROWTH_FRACTION = 0.1
+_SATURATION_REUSE_GROWTH_ATOMS = SATURATION_AUTOBATCHER_REUSE_GROWTH_ATOMS
+_SATURATION_REUSE_GROWTH_FRACTION = SATURATION_AUTOBATCHER_REUSE_GROWTH_FRACTION
 
 
 def capacity_cache_get(cache_key: tuple) -> ParallelCapacity | None:
@@ -216,7 +221,7 @@ def _get_inflight_autobatcher(
     """
     if _deps.InFlightAutoBatcher is None or _deps.ts is None or ts_model is None:
         return None, None
-    max_memory_padding = 0.5
+    max_memory_padding = AUTOBATCHER_MAX_MEMORY_PADDING_DEFAULT
     max_memory_scaler = None
     if config is not None:
         max_memory_padding = config.autobatcher_max_memory_padding

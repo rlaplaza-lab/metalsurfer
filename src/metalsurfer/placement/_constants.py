@@ -302,9 +302,11 @@ _VORONOI_AUTO_WIDEN_MAX_SCALE: float = 1.25
 # Adaptive-grid site generator
 # ---------------------------------------------------------------------------
 # Default coarse shell increment (Å). Exposed as AdsorptionConfig.adaptive_grid_spacing.
-_ADAPTIVE_GRID_DEFAULT_SPACING: float = 0.70
+_ADAPTIVE_GRID_DEFAULT_SPACING: float = _numeric_defaults.ADAPTIVE_GRID_DEFAULT_SPACING
 # Default refine depth (0 = coarse shell only). Exposed as adaptive_grid_refine_levels.
-_ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS: int = 0
+_ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS: int = (
+    _numeric_defaults.ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS
+)
 _ADAPTIVE_GRID_FINE_SCALE: float = 0.25
 _ADAPTIVE_GRID_H_MIN: float = 0.35
 # NMS merge radius: max(nms_scale * h_fine, nms_length_scale * L).
@@ -314,7 +316,9 @@ _ADAPTIVE_GRID_NMS_LENGTH_SCALE: float = 0.5
 # n_seeds × n_offsets ≤ this (all atoms are still seeded).
 _ADAPTIVE_GRID_WORK_BUDGET: int = 250_000
 # Floor merge radius as a fraction of framework median NN (adaptive_grid default).
-_ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE: float = 0.25
+_ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE: float = (
+    _numeric_defaults.ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE
+)
 # Bin-prethin when the coarse cloud exceeds this many points.
 _ADAPTIVE_GRID_BIN_PRETHIN: int = 8_000
 # Bin size (Å) for optional large-cloud prethin.

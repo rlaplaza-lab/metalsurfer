@@ -15,7 +15,11 @@ from metalsurfer.config import (
     resolved_bo_eval_budget,
     validate_site_generator_for_material,
 )
-from metalsurfer.ml.bayesian import ei_scores, pi_scores
+from metalsurfer.ml.bayesian import (
+    build_transfer_surrogate,
+    ei_scores,
+    pi_scores,
+)
 from metalsurfer.ml.schema import ComputationContext
 from metalsurfer.placement import _constants as placement_constants
 from metalsurfer.placement import geometry as placement_geometry
@@ -199,6 +203,37 @@ def test_numeric_defaults_single_source_of_truth():
     assert (
         BOTransferConfig().exploration_fraction
         == numeric_defaults.DEFAULT_TRANSFER_EXPLORATION_FRACTION
+    )
+    transfer = BOTransferConfig()
+    transfer_params = inspect.signature(build_transfer_surrogate).parameters
+    assert (
+        cfg.adaptive_grid_spacing,
+        cfg.adaptive_grid_refine_levels,
+        cfg.adaptive_grid_nms_framework_scale,
+        placement_constants._ADAPTIVE_GRID_DEFAULT_SPACING,
+        placement_constants._ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS,
+        placement_constants._ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE,
+        cfg.autobatcher_max_memory_padding,
+        cfg.saturation_autobatcher_reuse_growth_atoms,
+        cfg.saturation_autobatcher_reuse_growth_fraction,
+        transfer.weight_cap,
+        transfer.trust_patience,
+        transfer_params["weight_cap"].default,
+        transfer_params["trust_patience"].default,
+    ) == (
+        numeric_defaults.ADAPTIVE_GRID_DEFAULT_SPACING,
+        numeric_defaults.ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS,
+        numeric_defaults.ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE,
+        numeric_defaults.ADAPTIVE_GRID_DEFAULT_SPACING,
+        numeric_defaults.ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS,
+        numeric_defaults.ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE,
+        numeric_defaults.AUTOBATCHER_MAX_MEMORY_PADDING_DEFAULT,
+        numeric_defaults.SATURATION_AUTOBATCHER_REUSE_GROWTH_ATOMS,
+        numeric_defaults.SATURATION_AUTOBATCHER_REUSE_GROWTH_FRACTION,
+        numeric_defaults.BO_TRANSFER_WEIGHT_CAP_DEFAULT,
+        numeric_defaults.BO_TRANSFER_TRUST_PATIENCE_DEFAULT,
+        numeric_defaults.BO_TRANSFER_WEIGHT_CAP_DEFAULT,
+        numeric_defaults.BO_TRANSFER_TRUST_PATIENCE_DEFAULT,
     )
 
 

@@ -803,8 +803,7 @@ def test_process_joint_tuplet_bayesian_uses_ctx_conformer_energies(monkeypatch):
         lambda **_k: (ctx, None),
     )
     monkeypatch.setattr(
-        joint_tuplet_mod,
-        "estimate_placement_spec_capacity",
+        "metalsurfer.workflow.shared.estimate_placement_spec_capacity",
         lambda *_a, **_k: 4,
     )
 

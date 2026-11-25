@@ -6,12 +6,19 @@ Kept free of ``config`` / ``generators`` imports so ``AdsorptionConfig`` and
 
 from __future__ import annotations
 
-# Registered plugins (also the AdsorptionConfig / YAML selectable set).
-SITE_GENERATORS: tuple[str, ...] = (
+from typing import Literal, get_args
+
+SiteGeneratorSetting = Literal[
+    "auto",
     "topology",
     "voronoi",
     "adaptive_grid",
     "rolling_probe",
+]
+
+# Registered plugins (also the AdsorptionConfig / YAML selectable set).
+SITE_GENERATORS: tuple[str, ...] = tuple(
+    name for name in get_args(SiteGeneratorSetting) if name != "auto"
 )
 
 # Material allowlist per plugin id (single source of truth for config validation).

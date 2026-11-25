@@ -1,6 +1,7 @@
 """YAML campaign schema parsing for the Python campaign API."""
 
 import dataclasses
+import inspect
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -12,7 +13,7 @@ from ._utils import require_unique_molecule_names
 from .config import AdsorptionConfig, _format_unknown_key, fold_bo_config
 from .placement._material import validate_material_type
 from .result_paths import results_dir_for
-from .surface_prep import Substrate
+from .surface_prep import Substrate, prepare_substrate
 
 CampaignKind = Literal["adsorption", "adsorption_bo", "saturation", "saturation_bo"]
 
@@ -20,34 +21,10 @@ _ROOT_KEYS = frozenset({"campaign", "surface_type", "substrate", "molecules", "c
 
 _CONFIG_KEYS = frozenset(f.name for f in dataclasses.fields(AdsorptionConfig))
 
-_SUBSTRATE_KEYS = frozenset(
-    {
-        "bulk_id",
-        "slab_file",
-        "slab",
-        "material_type",
-        "miller_indices",
-        "supercell",
-        "alloy_host",
-        "alloy_guest",
-        "alloy_fraction",
-        "enforce_top_layer_fraction",
-        "adatom_symbol",
-        "adatom_coverage",
-        "align",
-        "slab_relaxation_mode",
-        "slab_relaxation_optimizer",
-        "slab_relaxation_fmax",
-        "slab_relaxation_steps",
-        "adatom_relaxation_mode",
-        "adatom_relaxation_optimizer",
-        "adatom_relaxation_fmax",
-        "adatom_relaxation_steps",
-        "relax_top_layer",
-        "freeze_symbols",
-        "top_layer_tolerance",
-    }
-)
+_SUBSTRATE_KEYS = frozenset(inspect.signature(prepare_substrate).parameters) - {
+    "config",
+    "results_dir",
+}
 
 
 @dataclass(frozen=True)

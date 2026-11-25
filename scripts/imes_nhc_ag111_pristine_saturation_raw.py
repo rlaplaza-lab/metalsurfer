@@ -22,11 +22,11 @@ RESULTS_DIR = f"results_{SURFACE_TYPE}"
 # ``[C-:1]`` tags the carbene carbon so EN-down sampling prioritizes C–surface bonds.
 IMES_NHC_SMILES = "CC1=CC(C)=CC(C)=C1N2[C-:1]N(C3=C(C)CC(C)=CC3C)C=C2"
 
-configure_logging(default_level="INFO")
 logger = logging.getLogger(__name__)
 
 
 def main():
+    configure_logging(default_level="INFO")
     config = AdsorptionConfig(
         num_conformers=20,
         num_placements=1000,

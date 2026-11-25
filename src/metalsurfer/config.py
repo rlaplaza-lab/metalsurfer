@@ -7,8 +7,14 @@ from math import isfinite
 from typing import Any, Literal
 
 from ._numeric_defaults import (
+    ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS,
+    ADAPTIVE_GRID_DEFAULT_SPACING,
+    ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE,
+    AUTOBATCHER_MAX_MEMORY_PADDING_DEFAULT,
     BINDING_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM,
     BO_TRANSFER_MIN_SIMILARITY_DEFAULT,
+    BO_TRANSFER_TRUST_PATIENCE_DEFAULT,
+    BO_TRANSFER_WEIGHT_CAP_DEFAULT,
     CONTACT_COVALENT_SCALE_DEFAULT,
     CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM,
     DEFAULT_FMAX,
@@ -26,6 +32,8 @@ from ._numeric_defaults import (
     MIN_PBC_IMAGE_SEPARATION_DEFAULT_ANGSTROM,
     OCCUPANCY_FOOTPRINT_SCALE_DEFAULT,
     RMSD_DEDUP_THRESHOLD_DEFAULT_ANGSTROM,
+    SATURATION_AUTOBATCHER_REUSE_GROWTH_ATOMS,
+    SATURATION_AUTOBATCHER_REUSE_GROWTH_FRACTION,
     STANDARD_PRESSURE_BAR,
     STANDARD_TEMPERATURE_K,
 )
@@ -36,6 +44,7 @@ from .site_plugin_ids import (
 from .site_plugin_ids import (
     SITE_GENERATORS as _SITE_GENERATORS,
 )
+from .site_plugin_ids import SiteGeneratorSetting
 
 _DEFAULT_BO_FAILURE_PENALTY_OVERRIDES: dict[str, float] = {
     "generation": 18.0,
@@ -53,10 +62,10 @@ class BOTransferConfig:
     enabled: bool = True
     mode: Literal["weighted", "cumulative_refit"] = "weighted"
     min_step_observations: int = 5
-    weight_cap: float = 0.35
+    weight_cap: float = BO_TRANSFER_WEIGHT_CAP_DEFAULT
     similarity_lengthscale: float = 4.0
     min_similarity: float = BO_TRANSFER_MIN_SIMILARITY_DEFAULT
-    trust_patience: int = 2
+    trust_patience: int = BO_TRANSFER_TRUST_PATIENCE_DEFAULT
     mae_tolerance: float = 0.05
     exploration_fraction: float = DEFAULT_TRANSFER_EXPLORATION_FRACTION
     proximity_lengthscale: float = 1.0
@@ -195,7 +204,7 @@ def _check_positive(name: str, value: float) -> None:
 
 def _check_non_negative(name: str, value: float) -> None:
     if not isfinite(value) or value < 0:
-        raise ValueError(f"{name} must be non-negative, got {value!r}")
+        raise ValueError(f"{name} must be finite and non-negative, got {value!r}")
 
 
 def _check_bool(name: str, value: Any) -> None:
@@ -442,11 +451,6 @@ def _check_unit_interval(
         bound = "[0.0, 1.0)" if exclusive_upper else "[0.0, 1.0]"
         qualifier = "finite " if mention_finite else ""
         raise ValueError(f"{name} must be {qualifier}in {bound}, got {value!r}")
-
-
-def _check_finite_nonneg(name: str, value: float) -> None:
-    if not isfinite(value) or value < 0.0:
-        raise ValueError(f"{name} must be finite and non-negative, got {value!r}")
 
 
 CONFORMER_WEIGHTING_OPTIONS: tuple[str, ...] = ("uniform", "boltzmann")
@@ -741,7 +745,7 @@ def _validate_bo_transfer(transfer: BOTransferConfig) -> None:
         transfer.similarity_lengthscale,
     )
     _check_unit_interval("bo.transfer.min_similarity", transfer.min_similarity)
-    _check_finite_nonneg("bo.transfer.mae_tolerance", transfer.mae_tolerance)
+    _check_non_negative("bo.transfer.mae_tolerance", transfer.mae_tolerance)
     _check_unit_interval(
         "bo.transfer.exploration_fraction", transfer.exploration_fraction
     )
@@ -919,18 +923,16 @@ class AdsorptionConfig:
     voronoi_auto_widen: bool = True
     site_classification_method: Literal["auto", "distance_ratio", "delaunay"] = "auto"
     # ``auto`` → topology (slab/NP) or Voronoi (porous); never chosen by auto: adaptive_grid / rolling_probe.
-    site_generator: Literal[
-        "auto", "topology", "voronoi", "adaptive_grid", "rolling_probe"
-    ] = "auto"
+    site_generator: SiteGeneratorSetting = "auto"
     # Slab (2D) face filter for adaptive_grid / rolling_probe; ignored on 3D.
     # positive = vacuum-richer face; negative = opposite; all = both.
     side_policy: Literal["all", "positive", "negative", "external"] = "positive"
     # Absolute shell increment (Å) for ``adaptive_grid`` (wall-near, not pores).
-    adaptive_grid_spacing: float = 0.70
+    adaptive_grid_spacing: float = ADAPTIVE_GRID_DEFAULT_SPACING
     # Refine halvings after the coarse shell (0 = coarse grid only).
-    adaptive_grid_refine_levels: int = 0
+    adaptive_grid_refine_levels: int = ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS
     # Floor on merge_radius as a fraction of framework median NN.
-    adaptive_grid_nms_framework_scale: float = 0.25
+    adaptive_grid_nms_framework_scale: float = ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE
     # Conformer prior: ``"boltzmann"`` weights by energy; ``"uniform"`` ignores energies.
     conformer_weighting: Literal["uniform", "boltzmann"] = "boltzmann"
     placement_filter: Callable[[PlacementSpec], bool] | None = field(
@@ -1027,12 +1029,16 @@ class AdsorptionConfig:
     slab_relaxation_optimizer: Literal["lbfgs", "bfgs", "fire"] = "lbfgs"
     slab_relaxation_fmax: float | None = None
     slab_relaxation_steps: int = 200
-    autobatcher_max_memory_padding: float = 0.5
+    autobatcher_max_memory_padding: float = AUTOBATCHER_MAX_MEMORY_PADDING_DEFAULT
     autobatcher_max_memory_scaler: float | None = None
     autobatcher_max_atoms_to_try: int | None = None
     saturation_autobatcher_reuse: bool = True
-    saturation_autobatcher_reuse_growth_atoms: int = 32
-    saturation_autobatcher_reuse_growth_fraction: float = 0.1
+    saturation_autobatcher_reuse_growth_atoms: int = (
+        SATURATION_AUTOBATCHER_REUSE_GROWTH_ATOMS
+    )
+    saturation_autobatcher_reuse_growth_fraction: float = (
+        SATURATION_AUTOBATCHER_REUSE_GROWTH_FRACTION
+    )
     bo: BOConfig = field(default_factory=BOConfig)
 
     def __post_init__(self) -> None:

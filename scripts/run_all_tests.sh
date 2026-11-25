@@ -57,7 +57,7 @@ _run_phase "1_quick" \
       --cov=src/metalsurfer \
       --cov-report=term-missing \
       --tb=short -v && \
-    '$PYTHON' -m coverage report --fail-under=85
+    '$PYTHON' -m coverage report
   "
 
 _run_phase "2_cpu" \

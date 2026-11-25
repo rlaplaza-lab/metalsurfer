@@ -433,13 +433,13 @@ def main() -> int:
         py = _resolve_python()
         pip = [*py, "-m", "pip"]
         run([*pip, "install", "--upgrade", "pip"])
-        run([*pip, "install", "--upgrade", "setuptools"])
+        run([*pip, "install", "--upgrade", "setuptools>=65,<81"])
         _install_numpy(py, pip)
         _install_torch_stack(py, pip)
         log("Installing metalsurfer[mlip,dev] for GPU suite")
         _install_metalsurfer_mlip(py, pip)
-        # After all installs (torch pins setuptools<82 which no longer ships
-        # pkg_resources): shadow the Python-3.12-incompatible system
+        # After all installs (torch can pull setuptools>=81, which no longer
+        # ships pkg_resources): shadow the Python-3.12-incompatible system
         # pkg_resources with a healthy pip-installed one.
         _shadow_broken_system_pkg_resources(py, pip)
         _assert_numpy_version(py)
