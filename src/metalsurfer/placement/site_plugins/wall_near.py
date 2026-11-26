@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..site_coords import median_nn_or_fallback, project_vertices_to_support_plane
+from ..site_coords import project_vertices_to_support_plane
 from ..site_wall_near_common import AdaptiveGridResult
 from .base import SiteCandidateBatch, empty_candidate_batch
 
@@ -35,11 +35,6 @@ def wall_near_batch_to_plugin(
         source_hints=[source_hint] * len(result.vertices),
         atom_indices=list(result.atom_indices),
         accessibility_tree=result.accessibility_tree,
-        topology_median_nn=float(
-            median_nn_or_fallback(
-                result.nn_dists, reference_positions=positions, cell=cell, pbc=pbc
-            )
-        ),
         normals=result.normals,
         clearances=result.clearances,
     )

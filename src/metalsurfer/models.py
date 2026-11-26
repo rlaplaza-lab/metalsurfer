@@ -560,6 +560,20 @@ def build_molecule_summary(
     )
 
 
+def _flatten_step_run(
+    step_name: str,
+    step_results: list[ScreeningResult],
+) -> ScreeningRunResult | None:
+    """Build one screening-like run for a saturation step, or ``None`` if empty."""
+    if not step_results:
+        return None
+    return ScreeningRunResult(
+        molecule=step_name,
+        results=step_results,
+        summary=build_molecule_summary(step_name, step_results),
+    )
+
+
 @dataclass
 class ScreeningRunResult:
     """All results for a single molecule within a screening run."""
@@ -909,16 +923,9 @@ class SaturationRunResult:
         flattened_runs: list[ScreeningRunResult] = []
         for step_result in self.steps:
             step_name = f"{self.molecule}_step_{step_result.step:03d}"
-            step_results = step_result.all_results
-            if not step_results:
-                continue
-            flattened_runs.append(
-                ScreeningRunResult(
-                    molecule=step_name,
-                    results=step_results,
-                    summary=build_molecule_summary(step_name, step_results),
-                )
-            )
+            run = _flatten_step_run(step_name, step_result.all_results)
+            if run is not None:
+                flattened_runs.append(run)
         return flattened_runs
 
     def format_completion(
@@ -1176,15 +1183,9 @@ class MultiMolSaturationRunResult:
                 for group in step_result.per_molecule_results.values()
                 for result in group
             ]
-            if not step_results:
-                continue
-            flattened_runs.append(
-                ScreeningRunResult(
-                    molecule=step_name,
-                    results=step_results,
-                    summary=build_molecule_summary(step_name, step_results),
-                )
-            )
+            run = _flatten_step_run(step_name, step_results)
+            if run is not None:
+                flattened_runs.append(run)
         return flattened_runs
 
 

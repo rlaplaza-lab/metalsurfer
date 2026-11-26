@@ -25,11 +25,18 @@ from .._csv_coerce import (
 )
 from .._numeric_defaults import (
     CONTACT_COVALENT_SCALE_DEFAULT,
+    DEFAULT_DEVICE,
+    DEFAULT_DISPERSION,
     DEFAULT_FMAX,
+    DEFAULT_MODEL_NAME,
+    DEFAULT_PLACEMENT_Z_RANGE,
     DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
     DEFAULT_SEED,
     DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
+    DEFAULT_STAGE1_STEPS,
+    DEFAULT_STAGE2_STEPS,
     DEFAULT_SYMMETRY_TOLERANCE,
+    DEFAULT_TASK_NAME,
     DEFAULT_TOP_LAYER_TOLERANCE,
     MIN_CONTACT_RATIO_DEFAULT,
     MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM,
@@ -255,16 +262,16 @@ class ComputationContext:
     a D3 correction changes energies for the same checkpoint and head.
     """
 
-    model_name: str = "uma-s-1p2"
-    task_name: str = "oc25"
-    dispersion: str = "none"
+    model_name: str = DEFAULT_MODEL_NAME
+    task_name: str = DEFAULT_TASK_NAME
+    dispersion: str = DEFAULT_DISPERSION
     material_type: str = field(kw_only=True)
     fmax: float = DEFAULT_FMAX
-    stage1_steps: int = 50
-    stage2_steps: int = 150
-    device: str = "cuda"
+    stage1_steps: int = DEFAULT_STAGE1_STEPS
+    stage2_steps: int = DEFAULT_STAGE2_STEPS
+    device: str = DEFAULT_DEVICE
     seed: int = DEFAULT_SEED
-    placement_z_range: tuple[float, float] = (0.7, 1.25)
+    placement_z_range: tuple[float, float] = DEFAULT_PLACEMENT_Z_RANGE
     placement_z_scale_by_covalent_radius: bool = True
     min_initial_distance: float = MIN_INITIAL_DISTANCE_DEFAULT_ANGSTROM
     min_contact_ratio: float = MIN_CONTACT_RATIO_DEFAULT

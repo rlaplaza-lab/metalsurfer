@@ -7,6 +7,13 @@ Writers and CSV row builders must agree on the layout under
 from pathlib import Path
 
 
+def results_dir_or_manual(surface_type: str | None) -> str:
+    """Return ``results_{surface_type}``, or ``results_manual`` when unset."""
+    if surface_type:
+        return str(results_dir_for(surface_type))
+    return "results_manual"
+
+
 def results_dir_for(surface_type: str) -> Path:
     """Return ``results_{surface_type}/`` for a campaign *surface_type* label.
 

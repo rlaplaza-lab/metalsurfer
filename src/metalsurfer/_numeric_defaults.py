@@ -5,12 +5,25 @@ user-facing API. Kept outside ``placement`` so ``config`` can import without
 loading ``placement.generators`` (circular import).
 """
 
+from typing import Literal
+
 DEFAULT_SYMMETRY_TOLERANCE: float = 0.1
 DEFAULT_SITE_EQUIVALENCE_TOLERANCE: float = 0.05
 DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD: float = 0.01
 DEFAULT_TOP_LAYER_TOLERANCE: float = 0.5
 DEFAULT_SEED: int = 42
 DEFAULT_FMAX: float = 0.05
+DEFAULT_MODEL_NAME: str = "uma-s-1p2"
+DEFAULT_TASK_NAME: str = "oc25"
+DEFAULT_DISPERSION: Literal["none", "d3"] = "none"
+DEFAULT_DEVICE: str = "cuda"
+DEFAULT_STAGE1_STEPS: int = 50
+DEFAULT_STAGE2_STEPS: int = 150
+DEFAULT_PLACEMENT_Z_RANGE: tuple[float, float] = (0.7, 1.25)
+# Bottom anchor (Å): skip a no-op translate, then reject a slab still off zero.
+DEFAULT_BOTTOM_ANCHOR_TRANSLATE_EPS: float = 1e-6
+DEFAULT_BOTTOM_ANCHOR_MAX_OFFSET_ANG: float = 0.05
+DEFAULT_FROZEN_SUBSTRATE_DISPLACEMENT_TOL_ANG: float = 0.01
 # Joblib-style CPU workers: -2 = all but one CPU (shared by config, sites, BO).
 DEFAULT_N_JOBS: int = -2
 
@@ -40,8 +53,10 @@ BINDING_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM: float = 4.0
 MIN_PBC_IMAGE_SEPARATION_DEFAULT_ANGSTROM: float = 8.0
 # BO transfer: prior rows below this feature-space similarity are dropped.
 BO_TRANSFER_MIN_SIMILARITY_DEFAULT: float = 0.05
-# Weighted transfer. Cumulative refit keeps its own weight_cap (0.5).
+# Campaign ``bo.transfer.weight_cap``. Cumulative refit keeps its own cap.
 BO_TRANSFER_WEIGHT_CAP_DEFAULT: float = 0.35
+BO_CUMULATIVE_REFIT_WEIGHT_CAP_DEFAULT: float = 0.5
+BO_CUMULATIVE_REFIT_PROXIMITY_FLOOR_DEFAULT: float = 0.05
 BO_TRANSFER_TRUST_PATIENCE_DEFAULT: int = 2
 ADAPTIVE_GRID_DEFAULT_SPACING: float = 0.70
 ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS: int = 0

@@ -453,7 +453,7 @@ class TestVectorizedHelpers:
         combined = slab + mol
         combined.set_cell(slab.get_cell())
         combined.set_pbc(slab.get_pbc())
-        syms, _, dist, thresh = _nonsurface_distance_and_threshold(
+        syms, dist, thresh = _nonsurface_distance_and_threshold(
             combined, ["Ru"], 1.3, material_type="slab"
         )
         assert not _is_molecule_connected_from_dist(syms, dist, thresh)
@@ -465,7 +465,7 @@ class TestVectorizedHelpers:
         combined = slab + mol
         combined.set_cell(slab.get_cell())
         combined.set_pbc(slab.get_pbc())
-        syms, _, dist, thresh = _nonsurface_distance_and_threshold(
+        syms, dist, thresh = _nonsurface_distance_and_threshold(
             combined, ["Ru"], 1.3, material_type="slab"
         )
         assert _is_molecule_connected_from_dist(syms, dist, thresh)
@@ -474,7 +474,7 @@ class TestVectorizedHelpers:
         """Verify vectorized bond counting matches a manually constructed case."""
         slab = make_slab()
         combined = place_molecule_on_slab(slab, make_water())
-        syms, _, dist, thresh = _nonsurface_distance_and_threshold(
+        syms, dist, thresh = _nonsurface_distance_and_threshold(
             combined, ["Ru"], 1.3, material_type="slab"
         )
         bonds = _bond_counts_from_dist(syms, dist, thresh)
@@ -484,7 +484,7 @@ class TestVectorizedHelpers:
     def test_vectorized_coord_fingerprint_water(self):
         slab = make_slab()
         combined = place_molecule_on_slab(slab, make_water())
-        syms, _, dist, thresh = _nonsurface_distance_and_threshold(
+        syms, dist, thresh = _nonsurface_distance_and_threshold(
             combined, ["Ru"], 1.3, material_type="slab"
         )
         fp = _coordination_fingerprint_from_dist(syms, dist, thresh)

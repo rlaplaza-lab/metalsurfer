@@ -25,7 +25,6 @@ normals for :class:`~metalsurfer.placement.site_types.Site` construction.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -60,7 +59,7 @@ from ._constants import (
     _VECTOR_NORM_EPS,
     _VORONOI_DEDUP_TOLERANCE,
 )
-from ._parallel import DEFAULT_N_JOBS, resolve_materialize_workers
+from ._parallel import DEFAULT_N_JOBS, parallel_map
 from .geometry import (
     framework_radii_from_symbols,
     tangent_basis_from_normal,
@@ -68,6 +67,7 @@ from .geometry import (
 from .site_coords import (
     _cart_to_frac,
     _deduplicate_points,
+    _is_3d_pbc,
     _wrap_cartesian,
     clearance_monotonic_mask,
     median_nn_or_fallback,
@@ -82,6 +82,7 @@ from .site_wall_near_common import (
     _best_per_support_key,
     _merge_by_radius,
     _nms_rank_order,
+    _require_side_policy,
     _side_policy_mask,
     _support_key,
     candidates_to_arrays,
@@ -154,8 +155,7 @@ def _wall_near_framework_setup(
     positions = np.asarray(positions, dtype=float)
     cell = np.asarray(cell, dtype=float)
     pbc = np.asarray(pbc, dtype=bool)
-    if side_policy not in ("all", "positive", "negative", "external"):
-        raise ValueError(f"Unknown side_policy {side_policy!r}")
+    _require_side_policy(side_policy)
     n_atoms = len(positions)
     if framework_radii is None:
         if symbols is not None and len(symbols) == n_atoms:
@@ -202,6 +202,14 @@ def _wall_near_framework_setup(
     )
 
 
+def _fine_target_spacing(characteristic_length: float) -> float:
+    """Finest shell spacing targeted by adaptive-grid refinement."""
+    return max(
+        _ADAPTIVE_GRID_FINE_SCALE * float(characteristic_length),
+        _ADAPTIVE_GRID_H_MIN * 0.5,
+    )
+
+
 def adaptive_grid_spacing(
     *,
     initial_spacing: float | None = None,
@@ -242,7 +250,7 @@ def adaptive_grid_spacing(
         )
     L = h0
 
-    h_target = max(_ADAPTIVE_GRID_FINE_SCALE * L, _ADAPTIVE_GRID_H_MIN * 0.5)
+    h_target = _fine_target_spacing(L)
     h_fine = h0
     for _ in range(levels):
         if h_fine <= h_target:
@@ -876,7 +884,7 @@ def _finalize_candidates(
     """One site per support key, snap to target clearance, then merge_radius NMS."""
     unique = _best_per_support_key(
         candidates,
-        keep_opposing_normals=int(np.count_nonzero(np.asarray(pbc, dtype=bool))) == 3,
+        keep_opposing_normals=_is_3d_pbc(pbc),
     )
     snapped = _lateral_snap_candidates(
         unique,
@@ -1036,12 +1044,7 @@ def _parallel_shell_filter(
             positions=positions,
         )
 
-    n_workers = resolve_materialize_workers(n_jobs, n_tasks=len(bounds))
-    if n_workers == 1 or len(bounds) == 1:
-        parts = [_one(b) for b in bounds]
-    else:
-        with ThreadPoolExecutor(max_workers=n_workers) as pool:
-            parts = list(pool.map(_one, bounds))
+    parts = parallel_map(_one, bounds, n_jobs=n_jobs, min_tasks=2)
     verts = [p[0] for p in parts if len(p[0])]
     dists = [p[1] for p in parts if len(p[1])]
     if not verts:
@@ -1187,10 +1190,7 @@ def generate_adaptive_grid_sites(
         return empty
 
     h = spacing.initial_spacing
-    h_target = max(
-        _ADAPTIVE_GRID_FINE_SCALE * spacing.characteristic_length,
-        _ADAPTIVE_GRID_H_MIN * 0.5,
-    )
+    h_target = _fine_target_spacing(spacing.characteristic_length)
     all_candidates = list(candidates)
     frontier = list(candidates)
     prev_by_support: dict[

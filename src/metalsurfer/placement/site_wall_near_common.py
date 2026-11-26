@@ -17,11 +17,18 @@ from ._constants import (
 )
 from .site_coords import (
     _cart_to_frac,
+    _periodic_axis_count,
     _periodic_image_offsets,
     _wrap_fractional,
 )
 
 SidePolicy = Literal["all", "positive", "negative", "external"]
+
+
+def _require_side_policy(side_policy: str) -> None:
+    """Raise unless *side_policy* is a known slab / wall-near value."""
+    if side_policy not in ("all", "positive", "negative", "external"):
+        raise ValueError(f"Unknown side_policy {side_policy!r}")
 
 
 @dataclass(frozen=True)
@@ -82,14 +89,12 @@ def _side_policy_mask(
       is ignored.
     - Three periodic axes (porous): no face filter; ``side_policy`` is ignored.
     """
-    if side_policy not in ("all", "positive", "negative", "external"):
-        raise ValueError(f"Unknown side_policy {side_policy!r}")
+    _require_side_policy(side_policy)
     n = len(normals)
     if n == 0:
         return np.ones(0, dtype=bool)
     keep = np.ones(n, dtype=bool)
-    pbc_arr = np.asarray(pbc, dtype=bool).reshape(3)
-    n_periodic = int(np.count_nonzero(pbc_arr))
+    n_periodic = _periodic_axis_count(pbc)
 
     if n_periodic == 2 and cell_has_volume(cell):
         if positions is None:

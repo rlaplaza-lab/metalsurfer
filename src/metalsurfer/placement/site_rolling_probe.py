@@ -15,7 +15,6 @@ free-volume / pore-centre enumeration (Voronoi).
 from __future__ import annotations
 
 from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Literal
 
@@ -30,11 +29,13 @@ from ._constants import (
     _ROLLING_PROBE_BRIDGE_SAMPLES,
     _ROLLING_PROBE_BURY_CN,
     _ROLLING_PROBE_CLASH_TOL,
+    _ROLLING_PROBE_MIN_CLEARANCE_FLOOR_ANG,
     _ROLLING_PROBE_NEIGHBOR_K,
     _ROLLING_PROBE_POROUS_EXPOSURE_N_STEPS,
+    _ROLLING_SLAB_NORMAL_DOT_MIN,
     _VECTOR_NORM_EPS,
 )
-from ._parallel import DEFAULT_N_JOBS, resolve_materialize_workers
+from ._parallel import DEFAULT_N_JOBS, parallel_map
 from .site_adaptive_grid import (
     _candidate_geometry_score,
     _exposure_mask,
@@ -44,7 +45,9 @@ from .site_adaptive_grid import (
     _wall_near_framework_setup,
 )
 from .site_coords import (
+    _is_3d_pbc,
     _minimum_image_cartesian_delta,
+    _periodic_axis_count,
     _wrap_cartesian,
     project_anchor_to_support_plane,
 )
@@ -436,12 +439,6 @@ def _contacts_to_candidates(
     return out
 
 
-_ROLLING_SLAB_NORMAL_DOT_MIN: float = 0.35
-# Absolute floor (Å) on the sampled contact clearance when the derived
-# shell target would sit below the framework's own minimum clearance.
-_ROLLING_PROBE_MIN_CLEARANCE_FLOOR_ANG: float = 0.05
-
-
 def _slab_face_contact_mask(
     candidates: list[CandidateSite],
     *,
@@ -458,8 +455,7 @@ def _slab_face_contact_mask(
     the rolling-probe ``dot_min`` — rolling-probe contact normals may be noisy,
     so a loose sign test is not enough here.
     """
-    pbc_arr = np.asarray(pbc, dtype=bool).reshape(3)
-    if not candidates or int(np.count_nonzero(pbc_arr)) != 2:
+    if not candidates or _periodic_axis_count(pbc) != 2:
         return candidates
     if not cell_has_volume(cell):
         return candidates
@@ -532,34 +528,17 @@ def generate_rolling_probe_sites(
     )
     atop_dirs = _fibonacci_sphere(_ROLLING_PROBE_ATOP_SAMPLES)
 
-    workers = resolve_materialize_workers(n_jobs, n_tasks=n_atoms)
-    if workers <= 1 or n_atoms < 4:
-        chunks = [
-            _atom_contacts(
-                i,
-                positions=positions,
-                framework_radii=framework_radii,
-                tree=tree,
-                skin=skin,
-                atop_dirs=atop_dirs,
-            )
-            for i in range(n_atoms)
-        ]
-    else:
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futs = [
-                pool.submit(
-                    _atom_contacts,
-                    i,
-                    positions=positions,
-                    framework_radii=framework_radii,
-                    tree=tree,
-                    skin=skin,
-                    atop_dirs=atop_dirs,
-                )
-                for i in range(n_atoms)
-            ]
-            chunks = [f.result() for f in futs]
+    def _one(atom_index: int):
+        return _atom_contacts(
+            atom_index,
+            positions=positions,
+            framework_radii=framework_radii,
+            tree=tree,
+            skin=skin,
+            atop_dirs=atop_dirs,
+        )
+
+    chunks = parallel_map(_one, range(n_atoms), n_jobs=n_jobs, min_tasks=4)
 
     contacts = [c for chunk in chunks for c in chunk]
     if not contacts:
@@ -580,10 +559,9 @@ def generate_rolling_probe_sites(
         return empty
 
     verts, _nn, _clears, _, normals = candidates_to_arrays(candidates, tree=tree)
-    n_periodic = int(np.count_nonzero(np.asarray(pbc, dtype=bool).reshape(3)))
     n_steps = (
         int(_ROLLING_PROBE_POROUS_EXPOSURE_N_STEPS)
-        if n_periodic == 3
+        if _is_3d_pbc(pbc)
         else int(_ADAPTIVE_GRID_EXPOSURE_N_STEPS)
     )
     keep = _exposure_mask(
@@ -615,8 +593,7 @@ def generate_rolling_probe_sites(
     clustered = _merge_by_radius(
         _best_per_support_key(
             candidates,
-            keep_opposing_normals=int(np.count_nonzero(np.asarray(pbc, dtype=bool)))
-            == 3,
+            keep_opposing_normals=_is_3d_pbc(pbc),
         ),
         cell=cell,
         pbc=pbc,

@@ -55,7 +55,7 @@ from .conftest import (
 
 def _nonsurface_graph(atoms, surface_symbols, multiplier=1.3, *, material_type="slab"):
     """Return (syms, dist_matrix, threshold) for non-surface atoms."""
-    syms, _, dist_matrix, threshold = _nonsurface_distance_and_threshold(
+    syms, dist_matrix, threshold = _nonsurface_distance_and_threshold(
         atoms, surface_symbols, multiplier, material_type=material_type
     )
     return syms, dist_matrix, threshold

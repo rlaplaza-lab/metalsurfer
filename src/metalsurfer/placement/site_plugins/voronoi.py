@@ -18,6 +18,7 @@ from .base import SiteCandidateBatch, SiteGenerationContext, empty_candidate_bat
 from .helpers import (
     candidate_enrichment_frames,
     inject_atop_sites,
+    remap_voronoi_atom_indices,
     slab_candidate_postprocess,
     slab_top_voronoi_inputs,
 )
@@ -86,14 +87,12 @@ class VoronoiGenerator:
             n_jobs=int(ctx.n_jobs),
         )
         source_hints = ["voronoi"] * len(vertices)
-        if len(voronoi_positions) != len(positions):
-            assert slab_top_atom_indices is not None
-            remap = np.asarray(slab_top_atom_indices, dtype=int)
-            atom_indices = [
-                tuple(int(remap[j]) for j in atoms) for atoms in local_atoms
-            ]
-        else:
-            atom_indices = list(local_atoms)
+        atom_indices = remap_voronoi_atom_indices(
+            list(local_atoms),
+            voronoi_n=len(voronoi_positions),
+            full_n=len(positions),
+            slab_top_atom_indices=slab_top_atom_indices,
+        )
 
         if len(vertices) == 0 and material_type == "porous":
             logger.warning(
@@ -231,10 +230,8 @@ class VoronoiGenerator:
             nn_dists=nn_dists,
             source_hints=source_hints,
             atom_indices=atom_indices,
-            has_topology_atop=has_topology_atop,
             slab_top_atom_indices=slab_top_atom_indices,
             accessibility_tree=accessibility_tree,
-            topology_median_nn=topology_median_nn,
             topology_primary_delaunay=topology_primary_delaunay,
             topology_expanded_xy=topology_expanded_xy,
             topology_expanded_origin=topology_expanded_origin,

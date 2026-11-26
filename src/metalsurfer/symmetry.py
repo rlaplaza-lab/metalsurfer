@@ -536,27 +536,16 @@ class SymmetryAnalyzer:
         return fp_ref != fp_cur
 
     def _operations_fingerprint(self, analyzer: SymmetryAnalyzer) -> str:
-        frac_ops = list(analyzer._frac_ops_from_dataset())
-
-        def sort_key(
-            item: tuple[np.ndarray, np.ndarray],
-        ) -> tuple[bytes, bytes]:
-            """Sort key for fractional symmetry operations.
-
-            Parameters
-            ----------
-            item
-                Tuple of (rotation, translation) arrays.
-            """
-            R, t = item
-            return (
-                np.round(R, decimals=5).tobytes(),
-                np.round(t, decimals=8).tobytes(),
+        keyed = [
+            (
+                np.round(rotation, decimals=5).tobytes(),
+                np.round(translation, decimals=8).tobytes(),
             )
-
-        frac_ops.sort(key=sort_key)
+            for rotation, translation in analyzer._frac_ops_from_dataset()
+        ]
+        keyed.sort()
         parts: list[bytes] = []
-        for R, t in frac_ops:
-            parts.append(np.round(R, decimals=5).tobytes())
-            parts.append(np.round(t, decimals=8).tobytes())
+        for rotation, translation in keyed:
+            parts.append(rotation)
+            parts.append(translation)
         return hashlib.sha256(b"".join(parts)).hexdigest()

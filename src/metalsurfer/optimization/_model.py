@@ -10,6 +10,12 @@ import scipy.special as sp_special
 from ase import Atoms
 
 from .._logging import torchsim_output_capture
+from .._numeric_defaults import (
+    DEFAULT_DEVICE,
+    DEFAULT_DISPERSION,
+    DEFAULT_MODEL_NAME,
+    DEFAULT_TASK_NAME,
+)
 from ..config import D3BJParameters, require_d3_preset, validate_uma_setup
 from ..exceptions import DependencyMissingError
 from . import _deps
@@ -170,11 +176,11 @@ def fairchem_backbone(model: Any) -> Any:
 
 
 def setup_torchsim_model(  # pragma: no cover - requires MLIP stack / GPU
-    model_name: str = "uma-s-1p2",
-    device: str = "cuda",
-    task_name: str = "oc25",
+    model_name: str = DEFAULT_MODEL_NAME,
+    device: str = DEFAULT_DEVICE,
+    task_name: str = DEFAULT_TASK_NAME,
     *,
-    dispersion: str = "none",
+    dispersion: str = DEFAULT_DISPERSION,
 ):
     """Create a TorchSim FairChemModel wrapper.
 

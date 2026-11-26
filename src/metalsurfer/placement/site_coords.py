@@ -103,8 +103,20 @@ __all__ = [
     "mic_nn_distances",
     "mic_support_positions",
     "periodic_accessibility_tree",
+    "_is_3d_pbc",
+    "_periodic_axis_count",
     "top_layer_mask_by_normal",
 ]
+
+
+def _periodic_axis_count(pbc: np.ndarray) -> int:
+    """Count periodic axes in a length-3 PBC mask."""
+    return int(np.count_nonzero(np.asarray(pbc, dtype=bool).reshape(3)))
+
+
+def _is_3d_pbc(pbc: np.ndarray) -> bool:
+    """Return whether *pbc* is periodic on all three axes."""
+    return _periodic_axis_count(pbc) == 3
 
 
 def _primary_height_band_mask(

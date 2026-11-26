@@ -157,6 +157,7 @@ def test_resolve_saturation_step_workload_config_resolves_before_split(monkeypat
         *,
         material_type="slab",
         site_context,
+        conformer_energies=None,
     ):
         del material_type
         recorded["site_context_is_sentinel"] = site_context is sentinel_site_context

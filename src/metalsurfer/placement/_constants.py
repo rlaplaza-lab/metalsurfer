@@ -362,6 +362,11 @@ _ROLLING_PROBE_BURY_CN: int = 10
 # Shorter ray exposure under full 3D PBC so opposite walls do not reject
 # valid wall-near chemisorption contacts.
 _ROLLING_PROBE_POROUS_EXPOSURE_N_STEPS: int = 2
+# Minimum unit-normal alignment with the selected slab face.
+_ROLLING_SLAB_NORMAL_DOT_MIN: float = 0.35
+# Absolute floor (Å) on the sampled contact clearance when the derived
+# shell target would sit below the framework's own minimum clearance.
+_ROLLING_PROBE_MIN_CLEARANCE_FLOOR_ANG: float = 0.05
 
 # Outward-normal probe: step = max(scale * probe_radius, floor) in Å.
 _OUTWARD_NORMAL_STEP_PROBE_SCALE: float = 0.2

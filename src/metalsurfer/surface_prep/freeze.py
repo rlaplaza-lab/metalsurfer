@@ -13,7 +13,10 @@ from ase import Atoms
 from ase.constraints import FixAtoms
 from scipy.spatial import KDTree
 
-from .._numeric_defaults import DEFAULT_TOP_LAYER_TOLERANCE
+from .._numeric_defaults import (
+    DEFAULT_FROZEN_SUBSTRATE_DISPLACEMENT_TOL_ANG,
+    DEFAULT_TOP_LAYER_TOLERANCE,
+)
 from .._utils import cell_has_volume
 from ..exceptions import GeometryValidationError
 from ..placement._material import material_aware_pbc, validate_material_type
@@ -25,8 +28,6 @@ from ..placement.site_coords import (
 from ..placement.site_enumeration import get_unified_sites
 
 logger = logging.getLogger(__name__)
-
-_DEFAULT_FROZEN_SUBSTRATE_DISPLACEMENT_TOL_ANG = 0.01
 
 __all__ = [
     "identify_relaxable_surface_indices",
@@ -294,7 +295,7 @@ def check_frozen_substrate_displacement(
     reference_slab: Atoms,
     *,
     slab_size: int | None = None,
-    tolerance_ang: float = _DEFAULT_FROZEN_SUBSTRATE_DISPLACEMENT_TOL_ANG,
+    tolerance_ang: float = DEFAULT_FROZEN_SUBSTRATE_DISPLACEMENT_TOL_ANG,
 ) -> tuple[bool, str]:
     """Return whether *optimized* kept FixAtoms substrate indices fixed.
 

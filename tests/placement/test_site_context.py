@@ -757,7 +757,7 @@ def test_debug_write_sites_writes_plugin_and_final_overlays(tmp_path, monkeypatc
         num_placements=2,
         num_conformers=1,
     )
-    ctx, failure = _prepare_molecule_screening(
+    ctx, failure, _ = _prepare_molecule_screening(
         smiles="O",
         molecule_name="water",
         slab=Substrate(slab_atoms, material_type="slab"),
@@ -809,7 +809,7 @@ def test_debug_write_sites_step_suffix_from_prepare(tmp_path, monkeypatch):
         num_placements=2,
         num_conformers=1,
     )
-    ctx, failure = _prepare_molecule_screening(
+    ctx, failure, _ = _prepare_molecule_screening(
         smiles="O",
         molecule_name="water",
         slab=Substrate(make_slab(nx=4, ny=4), material_type="slab"),
@@ -849,7 +849,7 @@ def test_debug_write_sites_skips_when_site_context_pre_supplied(tmp_path, monkey
         num_conformers=1,
     )
     pre = _get_unique_sites_for_specs(slab, config, material_type="slab")
-    ctx, failure = _prepare_molecule_screening(
+    ctx, failure, _ = _prepare_molecule_screening(
         smiles="O",
         molecule_name="water",
         slab=Substrate(slab, material_type="slab"),
@@ -887,7 +887,7 @@ def test_debug_write_sites_off_writes_nothing(tmp_path, monkeypatch):
         num_conformers=1,
     )
     water = make_water()
-    ctx, failure = _prepare_molecule_screening(
+    ctx, failure, _ = _prepare_molecule_screening(
         smiles="O",
         molecule_name="water",
         slab=Substrate(make_slab(nx=4, ny=4), material_type="slab"),

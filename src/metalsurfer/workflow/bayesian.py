@@ -570,9 +570,6 @@ def process_molecule_bayesian(
     debug_sites_step
         Saturation step index for ``debug_write_sites`` filenames (optional).
     """
-    if reference_smiles is None:
-        reference_smiles = smiles
-
     failure_summary: FailureSummary | None = None
     transfer_info = BOTransferInfo()
     bo_memory: BOStepMemory | None = None
@@ -590,7 +587,7 @@ def process_molecule_bayesian(
         failure_summary = summary
         return _outcome([])
 
-    ctx, early_failure = _prepare_molecule_screening(
+    ctx, early_failure, reference_smiles = _prepare_molecule_screening(
         smiles=smiles,
         molecule_name=molecule_name,
         slab=slab,
@@ -608,6 +605,7 @@ def process_molecule_bayesian(
         site_context=site_context,
         surface_type=surface_type,
         debug_sites_step=debug_sites_step,
+        reference_smiles=reference_smiles,
     )
     if ctx is None:
         assert early_failure is not None
@@ -646,16 +644,14 @@ def process_molecule_bayesian(
     max_enumerated_specs = stage.max_enumerated_specs
     grid_info = stage.grid_info
     if stage.pool is None:
-        if stage.capacity_exhausted:
-            logger.warning(
-                "No enumerated placement capacity for BO (max_enumerated_specs=%d)",
-                max_enumerated_specs,
-            )
-            return _bail_outcome(
-                BOPlacementFailure(n_candidate_specs=0, n_valid_pool=0)
-            )
-        if stage.n_candidate_specs == 0:
-            logger.warning("No candidate specs generated for BO")
+        if stage.capacity_exhausted or stage.n_candidate_specs == 0:
+            if stage.capacity_exhausted:
+                logger.warning(
+                    "No enumerated placement capacity for BO (max_enumerated_specs=%d)",
+                    max_enumerated_specs,
+                )
+            else:
+                logger.warning("No candidate specs generated for BO")
             return _bail_outcome(
                 BOPlacementFailure(n_candidate_specs=0, n_valid_pool=0)
             )

@@ -582,6 +582,7 @@ def _assemble_bo_joint_groups_from_specs(
     n_per_config: int,
     n_substrate: int,
     blocked: set[int] | None = None,
+    capacity: int | None = None,
 ) -> tuple[list[list[ScreeningResult]], list[set[int]]]:
     """Build one joint group per anchor.
 
@@ -616,6 +617,7 @@ def _assemble_bo_joint_groups_from_specs(
             material_type=slab.material_type,
             slab_for_sites=slab_for_sites,
             materialization_cache=materialization_cache,
+            capacity=capacity,
         )
         if not fill.combined:
             return None
@@ -724,7 +726,7 @@ def process_joint_tuplet_bayesian(
     temperature = config.saturation_temperature
     pressure = config.saturation_pressure
 
-    ctx, early_failure = _prepare_molecule_screening(
+    ctx, early_failure, _ = _prepare_molecule_screening(
         smiles=smiles,
         molecule_name=molecule_name,
         slab=slab,
@@ -855,6 +857,7 @@ def process_joint_tuplet_bayesian(
             n_per_config=n,
             n_substrate=len(base_slab),
             blocked=acq_state.evaluated,
+            capacity=max_enumerated_specs,
         )
         acq_state.evaluated.update(fresh)
         for pool_set in pool_sets:

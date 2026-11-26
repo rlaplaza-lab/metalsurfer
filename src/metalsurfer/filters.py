@@ -107,8 +107,8 @@ def _nonsurface_distance_and_threshold(
     multiplier: float,
     *,
     material_type: str,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Mask out surface atoms and return (syms, coords, dist_matrix, threshold).
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Mask out surface atoms and return (syms, dist_matrix, threshold).
 
     Shared preamble for the bond-count and coordination-fingerprint filters: the
     non-surface symbol mask, the MIC-aware pairwise distances, and the covalent
@@ -124,7 +124,7 @@ def _nonsurface_distance_and_threshold(
     syms = syms[mask]
     dist_matrix = _mic_pairwise_distances(coords, atoms, material_type=material_type)
     threshold = _covalent_threshold_matrix(syms, multiplier)
-    return syms, coords, dist_matrix, threshold
+    return syms, dist_matrix, threshold
 
 
 def _bonded_matrix(dist_matrix: np.ndarray, threshold_matrix: np.ndarray) -> np.ndarray:
@@ -472,7 +472,7 @@ def check_decomposition(
             return False, "no adsorbate atoms after prefix"
         surface_symbols = None
 
-    syms, _coords, dist_matrix, threshold = _nonsurface_distance_and_threshold(
+    syms, dist_matrix, threshold = _nonsurface_distance_and_threshold(
         atoms,
         surface_symbols,
         connectivity_multiplier,

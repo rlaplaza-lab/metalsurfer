@@ -4,13 +4,18 @@ import dataclasses
 import inspect
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import yaml
 from ase import Atoms
 
 from ._utils import require_unique_molecule_names
-from .config import AdsorptionConfig, _format_unknown_key, fold_bo_config
+from .config import (
+    AdsorptionConfig,
+    _check_choice,
+    _format_unknown_key,
+    fold_bo_config,
+)
 from .placement._material import validate_material_type
 from .result_paths import results_dir_for
 from .surface_prep import Substrate, prepare_substrate
@@ -67,7 +72,7 @@ def _parse_molecules(raw: Any) -> list[tuple[str, str]]:
 
 
 def _normalize_substrate(raw: Any) -> dict[str, Any]:
-    substrate = _require_mapping(raw, context="substrate")
+    substrate = dict(_require_mapping(raw, context="substrate"))
     unknown = set(substrate) - _SUBSTRATE_KEYS
     if unknown:
         quoted = ", ".join(sorted(unknown))
@@ -109,15 +114,8 @@ def _normalize_substrate(raw: Any) -> dict[str, Any]:
 
 
 def _parse_campaign_kind(raw: Any) -> CampaignKind:
-    allowed: tuple[CampaignKind, ...] = (
-        "adsorption",
-        "adsorption_bo",
-        "saturation",
-        "saturation_bo",
-    )
-    if raw not in allowed:
-        quoted = ", ".join(repr(item) for item in allowed)
-        raise ValueError(f"campaign must be one of {quoted}, got {raw!r}")
+    allowed = get_args(CampaignKind)
+    _check_choice("campaign", raw, allowed=allowed)
     return raw
 
 

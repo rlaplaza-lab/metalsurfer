@@ -55,10 +55,8 @@ class SiteCandidateBatch:
     nn_dists: np.ndarray
     source_hints: list[str]
     atom_indices: list[tuple[int, ...]]
-    has_topology_atop: bool = False
     slab_top_atom_indices: np.ndarray | None = None
     accessibility_tree: KDTree | None = None
-    topology_median_nn: float | None = None
     topology_primary_delaunay: Delaunay | None = None
     topology_expanded_xy: np.ndarray | None = None
     topology_expanded_origin: list[int] | None = None

@@ -1661,7 +1661,6 @@ def run_saturation_screening(
             E_mol = ref.get_molecule_energy(mol)
             if E_mol is None:
                 _missing_molecule_reference(mol, config)
-                logger.warning("Skipping %s: no reference energy", mol)
                 continue
 
             run_result = _run_single_molecule_saturation(

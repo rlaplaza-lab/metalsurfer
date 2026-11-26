@@ -2,7 +2,6 @@
 
 import logging
 from collections.abc import Iterator, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from typing import NamedTuple
 
 import numpy as np
@@ -22,7 +21,7 @@ from ._constants import (
     _SITE_CLASSIFICATION_NEIGHBOURS,
     _VORONOI_DEDUP_TOLERANCE,
 )
-from ._parallel import DEFAULT_N_JOBS, resolve_materialize_workers
+from ._parallel import DEFAULT_N_JOBS, parallel_map, resolve_materialize_workers
 from .site_coords import (
     _build_periodic_images,
     _deduplicate_points,
@@ -595,10 +594,12 @@ def _enrich_along_ridges(
         inv_cell = np.linalg.inv(cell)
 
     edge_list = sorted(edges)
-    n_workers = resolve_materialize_workers(n_jobs, n_tasks=len(edge_list))
-    if n_workers <= 1 or len(edge_list) < 32:
-        candidate_pts = _enrich_edge_candidates(
-            edge_list,
+    n_edges = len(edge_list)
+    n_workers = resolve_materialize_workers(n_jobs, n_tasks=n_edges)
+
+    def _one(edge_chunk: Sequence[tuple[int, int]]) -> list[np.ndarray]:
+        return _enrich_edge_candidates(
+            edge_chunk,
             vertices=vertices,
             support_sets=support_sets,
             target_spacing=target_spacing,
@@ -606,26 +607,14 @@ def _enrich_along_ridges(
             pbc=pbc,
             inv_cell=inv_cell,
         )
+
+    if n_workers <= 1 or n_edges < 32:
+        chunks: list[Sequence[tuple[int, int]]] = [edge_list]
     else:
-        chunk = max(1, (len(edge_list) + n_workers - 1) // n_workers)
-        chunks = [edge_list[i : i + chunk] for i in range(0, len(edge_list), chunk)]
-        candidate_pts = []
-        with ThreadPoolExecutor(max_workers=n_workers) as pool:
-            futures = [
-                pool.submit(
-                    _enrich_edge_candidates,
-                    ch,
-                    vertices=vertices,
-                    support_sets=support_sets,
-                    target_spacing=target_spacing,
-                    cell=cell,
-                    pbc=pbc,
-                    inv_cell=inv_cell,
-                )
-                for ch in chunks
-            ]
-            for fut in futures:
-                candidate_pts.extend(fut.result())
+        chunk = max(1, (n_edges + n_workers - 1) // n_workers)
+        chunks = [edge_list[i : i + chunk] for i in range(0, n_edges, chunk)]
+    parts = parallel_map(_one, chunks, n_jobs=n_jobs, min_tasks=32, n_tasks=n_edges)
+    candidate_pts = [pt for part in parts for pt in part]
 
     if not candidate_pts:
         return vertices, nn_dists

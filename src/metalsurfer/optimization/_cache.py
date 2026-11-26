@@ -66,12 +66,6 @@ class ParallelCapacity:
     max_memory_scaler: float | None = None
 
 
-# Fallback growth bounds when a saturation autobatcher is reused for a slightly
-# larger neighbour. Overridable via AdsorptionConfig.
-_SATURATION_REUSE_GROWTH_ATOMS = SATURATION_AUTOBATCHER_REUSE_GROWTH_ATOMS
-_SATURATION_REUSE_GROWTH_FRACTION = SATURATION_AUTOBATCHER_REUSE_GROWTH_FRACTION
-
-
 def capacity_cache_get(cache_key: tuple) -> ParallelCapacity | None:
     """Return the cached parallel-relaxation capacity for *cache_key*, if any.
 
@@ -258,8 +252,8 @@ def _get_inflight_autobatcher(
                     ):
                         matching_candidates.append((cache_key, cache_ab))
                 matching_candidates.sort(key=lambda item: int(item[0][4]), reverse=True)
-                growth_atoms = _SATURATION_REUSE_GROWTH_ATOMS
-                growth_fraction = _SATURATION_REUSE_GROWTH_FRACTION
+                growth_atoms = SATURATION_AUTOBATCHER_REUSE_GROWTH_ATOMS
+                growth_fraction = SATURATION_AUTOBATCHER_REUSE_GROWTH_FRACTION
                 if config is not None:
                     growth_atoms = config.saturation_autobatcher_reuse_growth_atoms
                     growth_fraction = (

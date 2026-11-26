@@ -273,6 +273,41 @@ def merge_dedup_site_arrays(
     )
 
 
+def remap_voronoi_atom_indices(
+    local_atoms: list[tuple[int, ...]],
+    *,
+    voronoi_n: int,
+    full_n: int,
+    slab_top_atom_indices: np.ndarray | None,
+) -> list[tuple[int, ...]]:
+    """Map sliced Voronoi support indices onto the full structure."""
+    if voronoi_n == full_n:
+        return list(local_atoms)
+    if slab_top_atom_indices is None:
+        raise ValueError(
+            "slab_top_atom_indices is required when Voronoi points "
+            "are a subset of the structure"
+        )
+    remap = np.asarray(slab_top_atom_indices, dtype=int)
+    return [tuple(int(remap[j]) for j in atoms) for atoms in local_atoms]
+
+
+def unit_lift_from_centroid(
+    anchor: np.ndarray,
+    mic_points: np.ndarray,
+) -> np.ndarray | None:
+    """Return the unit lift from the support centroid, or ``None`` if degenerate."""
+    if len(mic_points) == 0:
+        return None
+    lift = np.asarray(anchor, dtype=float) - np.mean(
+        np.asarray(mic_points, dtype=float), axis=0
+    )
+    nrm = float(np.linalg.norm(lift))
+    if nrm < _SURFACE_NORMAL_FALLBACK_NORM_EPS:
+        return None
+    return lift / nrm
+
+
 def candidate_enrichment_frames(
     vertices: np.ndarray,
     nn_dists: np.ndarray,
@@ -317,14 +352,13 @@ def candidate_enrichment_frames(
             if len(pts) == 0:
                 fallback_idx.append(i)
                 continue
-            centroid = np.mean(pts, axis=0)
-            lift = vert - centroid
-            nrm = float(np.linalg.norm(lift))
-            if nrm >= _SURFACE_NORMAL_FALLBACK_NORM_EPS:
-                normals[i] = lift / nrm
+            lift_hat = unit_lift_from_centroid(vert, pts)
+            if lift_hat is not None:
+                normals[i] = lift_hat
                 continue
             # Anchor already lies on the support plane (no probe lift).
             if com is not None:
+                centroid = np.mean(pts, axis=0)
                 outward = centroid - com
                 on = float(np.linalg.norm(outward))
                 if on >= _SURFACE_NORMAL_FALLBACK_NORM_EPS:
@@ -584,13 +618,9 @@ def inject_atop_sites(
             nbr_pos = mic_support_positions(
                 atom_pos, positions, nbrs, cell=cell, pbc=pbc
             )
-            if len(nbr_pos) == 0:
+            n_hat = unit_lift_from_centroid(atom_pos, nbr_pos)
+            if n_hat is None:
                 continue
-            lift = atom_pos - np.mean(nbr_pos, axis=0)
-            nrm = float(np.linalg.norm(lift))
-            if nrm < _SURFACE_NORMAL_FALLBACK_NORM_EPS:
-                continue
-            n_hat = lift / nrm
             probe = atom_pos + atop_height * n_hat
             anchor = atom_pos
             if np.any(pbc):

@@ -29,14 +29,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install core dependencies
+      - name: Install package and dev tools
         run: |
           pip install --upgrade pip
-          pip install pytest pytest-cov coverage
-          pip install numpy ase pandas rdkit scipy scikit-learn
-
-      - name: Install package (editable)
-        run: pip install -e .
+          pip install -e ".[dev]"
 
       - name: Run quick tests
         run: |

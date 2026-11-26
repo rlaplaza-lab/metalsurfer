@@ -117,7 +117,7 @@ def test_parse_campaign_accepts_all_valid_kinds(kind):
 
 
 def test_parse_campaign_rejects_invalid_kind():
-    with pytest.raises(ValueError, match="campaign must be one of"):
+    with pytest.raises(ValueError, match="campaign must be "):
         parse_campaign_dict({**_VALID_BASE, "campaign": "vibrations"})
 
 

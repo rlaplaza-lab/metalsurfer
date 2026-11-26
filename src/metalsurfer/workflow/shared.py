@@ -58,7 +58,7 @@ from ..reporting import (
     FilterFailure,
     ReferenceFailure,
 )
-from ..result_paths import results_dir_for
+from ..result_paths import results_dir_for, results_dir_or_manual
 from ..surface_prep import Substrate, accept_substrate_for_api, apply_material_pbc
 from ..surface_prep._surfaces import validate_substrate_conformer_sizing
 from ..surface_prep.freeze import (
@@ -1017,6 +1017,41 @@ def resolve_workload_config(
     return resolved
 
 
+def resolve_workload_from_geometry(
+    config: AdsorptionConfig,
+    *,
+    ts_model,
+    conformers: list[Atoms],
+    slab_atoms: Atoms,
+    slab_for_sites: Atoms,
+    smiles: str,
+    material_type: str,
+    site_context: SiteContext | None,
+    freeze_ref: Atoms,
+    bo_enabled: bool,
+    conformer_energies: list[float] | None = None,
+) -> AdsorptionConfig:
+    """Resolve workload from an already chosen site context and freeze reference."""
+    frozen_indices = frozen_indices_from_constraints(freeze_ref)
+    representative_atoms = build_representative_relaxation_atoms(
+        conformers,
+        slab_atoms,
+        slab_for_sites,
+        config,
+        smiles,
+        material_type=material_type,
+        site_context=site_context,
+        conformer_energies=conformer_energies,
+    )
+    return resolve_workload_config(
+        config,
+        ts_model=ts_model,
+        representative_atoms=representative_atoms,
+        frozen_indices=frozen_indices,
+        bo_enabled=bo_enabled,
+    )
+
+
 def resolve_saturation_step_workload_config(
     config: AdsorptionConfig,
     *,
@@ -1065,21 +1100,16 @@ def resolve_saturation_step_workload_config(
     freeze_ref = (
         base_slab_for_frozen if base_slab_for_frozen is not None else slab_atoms
     )
-    frozen_indices = frozen_indices_from_constraints(freeze_ref)
-    representative_atoms = build_representative_relaxation_atoms(
-        conformers,
-        slab_atoms,
-        slab_for_sites,
-        config,
-        smiles,
-        material_type=material_type,
-        site_context=site_context,
-    )
-    return resolve_workload_config(
+    return resolve_workload_from_geometry(
         config,
         ts_model=ts_model,
-        representative_atoms=representative_atoms,
-        frozen_indices=frozen_indices,
+        conformers=conformers,
+        slab_atoms=slab_atoms,
+        slab_for_sites=slab_for_sites,
+        smiles=smiles,
+        material_type=material_type,
+        site_context=site_context,
+        freeze_ref=freeze_ref,
         bo_enabled=bo_enabled,
     )
 
@@ -1221,11 +1251,15 @@ def _prepare_molecule_screening(
     site_context: SiteContext | None = None,
     surface_type: str = "manual",
     debug_sites_step: int | None = None,
-) -> tuple[MoleculeScreeningContext | None, FailureSummary | None]:
+    reference_smiles: str | None = None,
+) -> tuple[MoleculeScreeningContext | None, FailureSummary | None, str]:
     """Shared preamble for standard and BO molecule screening.
 
-    Returns ``(context, None)`` on success, or ``(None, failure)`` on early bailout.
+    Returns ``(context, None, reference_smiles)`` on success, or
+    ``(None, failure, reference_smiles)`` on early bailout.
+    ``reference_smiles`` falls back to *smiles*.
     """
+    resolved_reference = smiles if reference_smiles is None else reference_smiles
     E_slab = (
         slab_energy_override
         if slab_energy_override is not None
@@ -1233,7 +1267,11 @@ def _prepare_molecule_screening(
     )
     E_mol = reference_energies.get_molecule_energy(molecule_name)
     if E_mol is None:
-        return None, _missing_molecule_reference(molecule_name, config)
+        return (
+            None,
+            _missing_molecule_reference(molecule_name, config),
+            resolved_reference,
+        )
 
     t0 = time.perf_counter()
     if conformers is None:
@@ -1248,8 +1286,12 @@ def _prepare_molecule_screening(
             t_conformers = time.perf_counter() - t0
             if conformer_pack is None:
                 logger.error("Could not generate conformers for %s", molecule_name)
-                return None, ConformerFailure(
-                    reason=f"could not generate conformers for {molecule_name}"
+                return (
+                    None,
+                    ConformerFailure(
+                        reason=f"could not generate conformers for {molecule_name}"
+                    ),
+                    resolved_reference,
                 )
             conformers, conformer_energies = conformer_pack
     else:
@@ -1297,23 +1339,18 @@ def _prepare_molecule_screening(
             if effective_base_slab_for_frozen is not None
             else slab.atoms
         )
-        frozen_indices = frozen_indices_from_constraints(freeze_ref)
-        representative_atoms = build_representative_relaxation_atoms(
-            conformers,
-            slab.atoms,
-            slab_for_sites,
-            config,
-            smiles,
-            material_type=slab.material_type,
-            site_context=site_context,
-            conformer_energies=conformer_energies,
-        )
-        resolved = resolve_workload_config(
+        resolved = resolve_workload_from_geometry(
             config,
             ts_model=ts_model,
-            representative_atoms=representative_atoms,
-            frozen_indices=frozen_indices,
+            conformers=conformers,
+            slab_atoms=slab.atoms,
+            slab_for_sites=slab_for_sites,
+            smiles=smiles,
+            material_type=slab.material_type,
+            site_context=site_context,
+            freeze_ref=freeze_ref,
             bo_enabled=bo_enabled,
+            conformer_energies=conformer_energies,
         )
     if resolved.num_placements is None:
         raise ValueError("config.num_placements must be set")
@@ -1332,6 +1369,7 @@ def _prepare_molecule_screening(
             conformer_energies=conformer_energies,
         ),
         None,
+        resolved_reference,
     )
 
 
@@ -1445,9 +1483,7 @@ def load_molecules(
     skip_saturation_file
         Whether to skip based on saturation summary.
     """
-    results_dir = (
-        str(results_dir_for(surface_type)) if surface_type else "results_manual"
-    )
+    results_dir = results_dir_or_manual(surface_type)
     all_smiles, all_molecules = _read_molecules_csv(csv_file)
 
     return _select_molecules_for_processing(
@@ -1466,9 +1502,7 @@ def _load_normalized_molecule_pairs(
     surface_type: str | None,
     skip_saturation_file: bool,
 ) -> tuple[list[str], list[str], str]:
-    results_dir = (
-        str(results_dir_for(surface_type)) if surface_type else "results_manual"
-    )
+    results_dir = results_dir_or_manual(surface_type)
     all_smiles = [smiles for smiles, _ in pairs]
     all_molecules = [name for _, name in pairs]
     return _select_molecules_for_processing(

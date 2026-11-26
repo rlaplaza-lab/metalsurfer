@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from typing import TypeVar
 
 from .._numeric_defaults import DEFAULT_N_JOBS
 
-__all__ = ["DEFAULT_N_JOBS", "resolve_materialize_workers"]
+__all__ = ["DEFAULT_N_JOBS", "parallel_map", "resolve_materialize_workers"]
+
+_T = TypeVar("_T")
+_R = TypeVar("_R")
 
 
 def resolve_materialize_workers(
@@ -43,3 +49,25 @@ def resolve_materialize_workers(
     if n_tasks is not None:
         workers = min(workers, max(1, int(n_tasks)))
     return workers
+
+
+def parallel_map(
+    fn: Callable[[_T], _R],
+    items: Sequence[_T],
+    *,
+    n_jobs: int = DEFAULT_N_JOBS,
+    min_tasks: int,
+    n_tasks: int | None = None,
+) -> list[_R]:
+    """Map *fn* in order. Serial when workers are 1 or *n_tasks* < *min_tasks*.
+
+    *n_tasks* defaults to ``len(items)`` so chunked work can keep the original
+    task count for the cutoff.
+    """
+    sequenced = list(items)
+    count = len(sequenced) if n_tasks is None else int(n_tasks)
+    workers = resolve_materialize_workers(n_jobs, n_tasks=count)
+    if workers <= 1 or count < min_tasks:
+        return [fn(item) for item in sequenced]
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(fn, sequenced))

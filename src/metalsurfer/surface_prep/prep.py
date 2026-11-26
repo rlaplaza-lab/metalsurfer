@@ -8,6 +8,7 @@ import numpy as np
 from ase import Atoms
 
 from .. import optimization
+from .._numeric_defaults import DEFAULT_BOTTOM_ANCHOR_TRANSLATE_EPS
 from ..config import (
     SLAB_RELAXATION_MODE,
     SLAB_RELAXATION_OPTIMIZER,
@@ -79,7 +80,7 @@ def _anchor_atoms_bottom(atoms: Atoms) -> Atoms:
     """Translate *atoms* so the lowest atom sits at z = 0."""
     result = atoms.copy()
     z_min = float(np.min(result.get_positions()[:, 2]))
-    if abs(z_min) > 1e-6:
+    if abs(z_min) > DEFAULT_BOTTOM_ANCHOR_TRANSLATE_EPS:
         result.translate((0.0, 0.0, -z_min))
     return result
 

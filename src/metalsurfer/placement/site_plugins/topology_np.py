@@ -104,8 +104,6 @@ class TopologyNPGenerator:
             nn_dists=topo_dists,
             source_hints=list(topo_sources),
             atom_indices=atom_indices,
-            has_topology_atop=has_topology_atop,
-            topology_median_nn=topology_median_nn,
             normals=normals,
             clearances=clearances,
         )

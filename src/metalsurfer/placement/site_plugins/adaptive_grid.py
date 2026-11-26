@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .._constants import _ADAPTIVE_GRID_DEFAULT_SPACING
+from ..._numeric_defaults import ADAPTIVE_GRID_DEFAULT_SPACING
 from ..site_adaptive_grid import _SOURCE_HINT, generate_adaptive_grid_sites
 from .base import SiteCandidateBatch, SiteGenerationContext
 from .wall_near import wall_near_batch_to_plugin
@@ -41,7 +41,7 @@ class AdaptiveGridGenerator:
         spacing = (
             float(ctx.adaptive_grid_spacing)
             if ctx.adaptive_grid_spacing is not None
-            else float(_ADAPTIVE_GRID_DEFAULT_SPACING)
+            else float(ADAPTIVE_GRID_DEFAULT_SPACING)
         )
         levels = int(ctx.adaptive_grid_refine_levels)
 

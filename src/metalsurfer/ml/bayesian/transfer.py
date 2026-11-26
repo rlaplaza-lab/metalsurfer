@@ -14,6 +14,8 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from ..._numeric_defaults import (
+    BO_CUMULATIVE_REFIT_PROXIMITY_FLOOR_DEFAULT,
+    BO_CUMULATIVE_REFIT_WEIGHT_CAP_DEFAULT,
     BO_TRANSFER_MIN_SIMILARITY_DEFAULT,
     BO_TRANSFER_TRUST_PATIENCE_DEFAULT,
     BO_TRANSFER_WEIGHT_CAP_DEFAULT,
@@ -706,9 +708,9 @@ def build_cumulative_refit_surrogate(
     surrogate: TransferCapableSurrogateType,
     n_estimators: int = 100,
     random_state: int = DEFAULT_SEED,
-    weight_cap: float = 0.5,
+    weight_cap: float = BO_CUMULATIVE_REFIT_WEIGHT_CAP_DEFAULT,
     proximity_lengthscale: float = 1.0,
-    proximity_floor: float = 0.05,
+    proximity_floor: float = BO_CUMULATIVE_REFIT_PROXIMITY_FLOOR_DEFAULT,
     mae_tolerance: float = 0.0,
     transfer_bad_rounds: int = 0,
     trust_patience: int = BO_TRANSFER_TRUST_PATIENCE_DEFAULT,

@@ -4,7 +4,7 @@ import difflib
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, fields
 from math import isfinite
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from ._numeric_defaults import (
     ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS,
@@ -17,12 +17,19 @@ from ._numeric_defaults import (
     BO_TRANSFER_WEIGHT_CAP_DEFAULT,
     CONTACT_COVALENT_SCALE_DEFAULT,
     CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM,
+    DEFAULT_DEVICE,
+    DEFAULT_DISPERSION,
     DEFAULT_FMAX,
+    DEFAULT_MODEL_NAME,
     DEFAULT_N_JOBS,
+    DEFAULT_PLACEMENT_Z_RANGE,
     DEFAULT_PLANAR_Z_VARIANCE_THRESHOLD,
     DEFAULT_SEED,
     DEFAULT_SITE_EQUIVALENCE_TOLERANCE,
+    DEFAULT_STAGE1_STEPS,
+    DEFAULT_STAGE2_STEPS,
     DEFAULT_SYMMETRY_TOLERANCE,
+    DEFAULT_TASK_NAME,
     DEFAULT_TOP_LAYER_TOLERANCE,
     DEFAULT_TRANSFER_EXPLORATION_FRACTION,
     ENERGY_DEDUP_THRESHOLD_DEFAULT_EV,
@@ -41,10 +48,50 @@ from .models import PlacementSpec
 from .site_plugin_ids import (
     PLUGIN_ALLOWED_MATERIALS as _SITE_GENERATOR_ALLOWED_MATERIALS,
 )
-from .site_plugin_ids import (
-    SITE_GENERATORS as _SITE_GENERATORS,
-)
 from .site_plugin_ids import SiteGeneratorSetting
+
+BOTransferMode = Literal["weighted", "cumulative_refit"]
+BOInitialSampling = Literal["random", "spread", "spread_xyz", "stratified"]
+BOAcquisition = Literal["lcb", "ei", "pi"]
+BOSurrogate = Literal[
+    "random_forest",
+    "extra_trees",
+    "gradient_boost",
+    "ridge",
+    "gaussian_process",
+    "ensemble",
+]
+DispersionSetting = Literal["none", "d3"]
+ConformerWeighting = Literal["uniform", "boltzmann"]
+SiteClassificationMethod = Literal["auto", "distance_ratio", "delaunay"]
+SidePolicy = Literal["all", "positive", "negative", "external"]
+TSOptimizer = Literal["fire", "lbfgs", "bfgs"]
+SLAB_RELAXATION_MODE = Literal["none", "ionic_only", "cell_only", "full"]
+SLAB_RELAXATION_OPTIMIZER = Literal["lbfgs", "bfgs", "fire"]
+
+
+def _choice_options(alias: Any) -> tuple[str, ...]:
+    """Return the string members of a ``Literal`` alias, in declaration order."""
+    return tuple(get_args(alias))
+
+
+DISPERSION_OPTIONS: tuple[str, ...] = _choice_options(DispersionSetting)
+CONFORMER_WEIGHTING_OPTIONS: tuple[str, ...] = _choice_options(ConformerWeighting)
+SITE_CLASSIFICATION_OPTIONS: tuple[str, ...] = _choice_options(SiteClassificationMethod)
+SITE_GENERATOR_OPTIONS: tuple[str, ...] = _choice_options(SiteGeneratorSetting)
+SIDE_POLICY_OPTIONS: tuple[str, ...] = _choice_options(SidePolicy)
+BO_TRANSFER_MODE_OPTIONS: tuple[str, ...] = _choice_options(BOTransferMode)
+BO_ACQUISITION_OPTIONS: tuple[str, ...] = _choice_options(BOAcquisition)
+BO_INITIAL_SAMPLING_OPTIONS: tuple[str, ...] = _choice_options(BOInitialSampling)
+BO_SURROGATE_OPTIONS: tuple[str, ...] = _choice_options(BOSurrogate)
+BO_TRANSFER_CAPABLE_SURROGATES: tuple[str, ...] = tuple(
+    name for name in BO_SURROGATE_OPTIONS if name != "gaussian_process"
+)
+TS_OPTIMIZER_OPTIONS: tuple[str, ...] = _choice_options(TSOptimizer)
+SLAB_RELAXATION_MODE_OPTIONS: tuple[str, ...] = _choice_options(SLAB_RELAXATION_MODE)
+SLAB_RELAXATION_OPTIMIZER_OPTIONS: tuple[str, ...] = _choice_options(
+    SLAB_RELAXATION_OPTIMIZER
+)
 
 _DEFAULT_BO_FAILURE_PENALTY_OVERRIDES: dict[str, float] = {
     "generation": 18.0,
@@ -60,7 +107,7 @@ class BOTransferConfig:
     """Cross-step Bayesian transfer hyperparameters for saturation BO."""
 
     enabled: bool = True
-    mode: Literal["weighted", "cumulative_refit"] = "weighted"
+    mode: BOTransferMode = "weighted"
     min_step_observations: int = 5
     weight_cap: float = BO_TRANSFER_WEIGHT_CAP_DEFAULT
     similarity_lengthscale: float = 4.0
@@ -79,21 +126,12 @@ class BOConfig:
     """Bayesian placement-selection hyperparameters."""
 
     initial_random: int | None = None
-    initial_sampling: Literal["random", "spread", "spread_xyz", "stratified"] = (
-        "spread_xyz"
-    )
+    initial_sampling: BOInitialSampling = "spread_xyz"
     batch_size: int | None = None
     total_batches: int = 18
     ucb_kappa: float = 1.96
-    acquisition: Literal["lcb", "ei", "pi"] = "pi"
-    surrogate: Literal[
-        "random_forest",
-        "extra_trees",
-        "gradient_boost",
-        "ridge",
-        "gaussian_process",
-        "ensemble",
-    ] = "gradient_boost"
+    acquisition: BOAcquisition = "pi"
+    surrogate: BOSurrogate = "gradient_boost"
     n_estimators: int = 100
     candidate_pool_size: int | None = None
     include_failure_negatives: bool = True
@@ -251,8 +289,6 @@ def _check_choice(name: str, value: str, *, allowed: tuple[str, ...]) -> None:
         message = f"{quoted}, or {allowed[-1]!r}" if quoted else repr(allowed[-1])
         raise ValueError(f"{name} must be {message}, got {value!r}")
 
-
-DISPERSION_OPTIONS: tuple[str, ...] = ("none", "d3")
 
 # Exact registry names. Local checkpoint paths stay unrestricted.
 _SINGLE_TASK_MODELS: dict[str, str] = {
@@ -453,48 +489,6 @@ def _check_unit_interval(
         raise ValueError(f"{name} must be {qualifier}in {bound}, got {value!r}")
 
 
-CONFORMER_WEIGHTING_OPTIONS: tuple[str, ...] = ("uniform", "boltzmann")
-SITE_CLASSIFICATION_OPTIONS: tuple[str, ...] = ("auto", "distance_ratio", "delaunay")
-SITE_GENERATOR_OPTIONS: tuple[str, ...] = ("auto",) + _SITE_GENERATORS
-SIDE_POLICY_OPTIONS: tuple[str, ...] = ("all", "positive", "negative", "external")
-BO_ACQUISITION_OPTIONS: tuple[str, ...] = ("lcb", "ei", "pi")
-BO_INITIAL_SAMPLING_OPTIONS: tuple[str, ...] = (
-    "random",
-    "spread",
-    "spread_xyz",
-    "stratified",
-)
-BO_SURROGATE_OPTIONS: tuple[str, ...] = (
-    "random_forest",
-    "extra_trees",
-    "gradient_boost",
-    "ridge",
-    "gaussian_process",
-    "ensemble",
-)
-BO_TRANSFER_CAPABLE_SURROGATES: tuple[str, ...] = (
-    "random_forest",
-    "extra_trees",
-    "gradient_boost",
-    "ridge",
-    "ensemble",
-)
-TS_OPTIMIZER_OPTIONS: tuple[str, ...] = ("fire", "lbfgs", "bfgs")
-SLAB_RELAXATION_MODE = Literal["none", "ionic_only", "cell_only", "full"]
-SLAB_RELAXATION_OPTIMIZER = Literal["lbfgs", "bfgs", "fire"]
-SLAB_RELAXATION_MODE_OPTIONS: tuple[SLAB_RELAXATION_MODE, ...] = (
-    "none",
-    "ionic_only",
-    "cell_only",
-    "full",
-)
-SLAB_RELAXATION_OPTIMIZER_OPTIONS: tuple[SLAB_RELAXATION_OPTIMIZER, ...] = (
-    "lbfgs",
-    "bfgs",
-    "fire",
-)
-
-
 def _validate_strict_contact_window(root: "AdsorptionConfig") -> None:
     """Require a non-empty band when a stricter contact check is on.
 
@@ -573,11 +567,8 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
         raise ValueError(
             f"min_contact_ratio must be in [0.5, 1.2], got {root.min_contact_ratio}"
         )
-    if root.max_initial_distance is not None and root.max_initial_distance <= 0:
-        raise ValueError(
-            "max_initial_distance must be positive when set, "
-            f"got {root.max_initial_distance}"
-        )
+    if root.max_initial_distance is not None:
+        _check_positive("max_initial_distance", root.max_initial_distance)
     if (
         root.max_initial_distance is not None
         and root.min_initial_distance > root.max_initial_distance
@@ -592,10 +583,8 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
         root.flat_aromatic_parallel_fraction,
         mention_finite=False,
     )
-    if root.voronoi_probe_radius is not None and root.voronoi_probe_radius <= 0:
-        raise ValueError(
-            f"voronoi_probe_radius must be positive, got {root.voronoi_probe_radius}"
-        )
+    if root.voronoi_probe_radius is not None:
+        _check_positive("voronoi_probe_radius", root.voronoi_probe_radius)
     if (
         root.voronoi_probe_radius is not None
         and root.voronoi_max_site_distance is not None
@@ -698,13 +687,9 @@ def _validate_relaxation(root: "AdsorptionConfig") -> None:
             "autobatcher_max_memory_padding must be in [0.1, 1.0], "
             f"got {root.autobatcher_max_memory_padding}"
         )
-    if (
-        root.autobatcher_max_memory_scaler is not None
-        and root.autobatcher_max_memory_scaler <= 0
-    ):
-        raise ValueError(
-            "autobatcher_max_memory_scaler must be positive when set, "
-            f"got {root.autobatcher_max_memory_scaler}"
+    if root.autobatcher_max_memory_scaler is not None:
+        _check_positive(
+            "autobatcher_max_memory_scaler", root.autobatcher_max_memory_scaler
         )
     if root.autobatcher_max_atoms_to_try is not None:
         _check_positive_int(
@@ -721,7 +706,7 @@ def _validate_bo_transfer(transfer: BOTransferConfig) -> None:
     _check_choice(
         "bo.transfer.mode",
         transfer.mode,
-        allowed=("weighted", "cumulative_refit"),
+        allowed=BO_TRANSFER_MODE_OPTIONS,
     )
     _check_positive_int(
         "bo.transfer.min_step_observations",
@@ -765,8 +750,7 @@ def _validate_bo(root: "AdsorptionConfig") -> None:
     if bo.batch_size is not None:
         _check_positive_int("bo.batch_size", bo.batch_size)
     _check_positive_int("bo.total_batches", bo.total_batches)
-    if bo.ucb_kappa < 0:
-        raise ValueError(f"bo.ucb_kappa must be non-negative, got {bo.ucb_kappa}")
+    _check_non_negative("bo.ucb_kappa", bo.ucb_kappa)
     _check_choice(
         "bo.initial_sampling",
         bo.initial_sampling,
@@ -895,22 +879,22 @@ class AdsorptionConfig:
     https://metalsurfer.readthedocs.io/en/latest/api/config.html
     """
 
-    model_name: str = "uma-s-1p2"
+    model_name: str = DEFAULT_MODEL_NAME
     # UMA/FairChem task head. ``oc22`` and ``oc25`` need a 1.2+ checkpoint.
-    task_name: str = "oc25"
+    task_name: str = DEFAULT_TASK_NAME
     # Off by default. ``"d3"`` adds TorchSim DFT-D3(BJ) for base ``omat`` (PBE)
     # or ``uma-s-1p2p1-ft-r2scan`` only.
-    dispersion: Literal["none", "d3"] = "none"
+    dispersion: DispersionSetting = DEFAULT_DISPERSION
     num_conformers: int = 10
     num_placements: int | None = None
-    device: str = "cuda"
+    device: str = DEFAULT_DEVICE
     fmax: float = DEFAULT_FMAX
-    stage1_steps: int = 50
-    stage2_steps: int = 150
+    stage1_steps: int = DEFAULT_STAGE1_STEPS
+    stage2_steps: int = DEFAULT_STAGE2_STEPS
     reference_optimization_steps: int = 100
     placement_x_range: tuple[float, float] = (-0.5, 0.5)
     placement_y_range: tuple[float, float] = (-0.5, 0.5)
-    placement_z_range: tuple[float, float] = (0.7, 1.25)
+    placement_z_range: tuple[float, float] = DEFAULT_PLACEMENT_Z_RANGE
     placement_z_scale_by_covalent_radius: bool = True
     placement_distance_recovery: bool = True
     # Rigid-body clash descent in recovery / n-tuplet packing; False → XY jitter only.
@@ -921,12 +905,12 @@ class AdsorptionConfig:
     # Ridge enrichment; no-op on planar slabs / nanoparticles (skip Voronoi).
     voronoi_site_enrichment: bool = True
     voronoi_auto_widen: bool = True
-    site_classification_method: Literal["auto", "distance_ratio", "delaunay"] = "auto"
+    site_classification_method: SiteClassificationMethod = "auto"
     # ``auto`` → topology (slab/NP) or Voronoi (porous); never chosen by auto: adaptive_grid / rolling_probe.
     site_generator: SiteGeneratorSetting = "auto"
     # Slab (2D) face filter for adaptive_grid / rolling_probe; ignored on 3D.
     # positive = vacuum-richer face; negative = opposite; all = both.
-    side_policy: Literal["all", "positive", "negative", "external"] = "positive"
+    side_policy: SidePolicy = "positive"
     # Absolute shell increment (Å) for ``adaptive_grid`` (wall-near, not pores).
     adaptive_grid_spacing: float = ADAPTIVE_GRID_DEFAULT_SPACING
     # Refine halvings after the coarse shell (0 = coarse grid only).
@@ -934,7 +918,7 @@ class AdsorptionConfig:
     # Floor on merge_radius as a fraction of framework median NN.
     adaptive_grid_nms_framework_scale: float = ADAPTIVE_GRID_NMS_FRAMEWORK_SCALE
     # Conformer prior: ``"boltzmann"`` weights by energy; ``"uniform"`` ignores energies.
-    conformer_weighting: Literal["uniform", "boltzmann"] = "boltzmann"
+    conformer_weighting: ConformerWeighting = "boltzmann"
     placement_filter: Callable[[PlacementSpec], bool] | None = field(
         default=None, repr=False
     )
@@ -1021,12 +1005,10 @@ class AdsorptionConfig:
     # Placement-materialization thread-pool override; None inherits n_jobs.
     placement_materialize_workers: int | None = None
     optimize_isolated_sequentially: bool = False
-    ts_optimizer: Literal["fire", "lbfgs", "bfgs"] = "fire"
+    ts_optimizer: TSOptimizer = "fire"
     steps_between_swaps: int = 5
-    slab_relaxation_mode: Literal["none", "ionic_only", "cell_only", "full"] = (
-        "ionic_only"
-    )
-    slab_relaxation_optimizer: Literal["lbfgs", "bfgs", "fire"] = "lbfgs"
+    slab_relaxation_mode: SLAB_RELAXATION_MODE = "ionic_only"
+    slab_relaxation_optimizer: SLAB_RELAXATION_OPTIMIZER = "lbfgs"
     slab_relaxation_fmax: float | None = None
     slab_relaxation_steps: int = 200
     autobatcher_max_memory_padding: float = AUTOBATCHER_MAX_MEMORY_PADDING_DEFAULT

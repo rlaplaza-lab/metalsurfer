@@ -13,6 +13,7 @@ from ase.optimize import BFGS, FIRE, LBFGS
 from scipy.spatial.distance import pdist
 
 from .._numeric_defaults import (
+    DEFAULT_BOTTOM_ANCHOR_MAX_OFFSET_ANG,
     DEFAULT_SLAB_TOP_VACUUM_ANG,
     DEFAULT_TOP_LAYER_TOLERANCE,
     MIN_CALCULATOR_CELL_C_ANG,
@@ -52,7 +53,6 @@ from .freeze import (
 
 logger = logging.getLogger(__name__)
 
-_INVERTED_SLAB_VACUUM_MARGIN_ANG = SLAB_VACUUM_FACE_MARGIN_ANG
 # Substrate-cell validity threshold; unrelated to the distance-gating
 # ``CELL_DET_EPS`` in :mod:`metalsurfer._utils` (1e-12, volume presence only).
 _CELL_DET_EPS = 1e-8
@@ -149,7 +149,7 @@ def ensure_slab_z_alignment(
     if c_len > 0.0:
         vacuum_below = z_min
         vacuum_above = c_len - z_max
-        if vacuum_below > vacuum_above + _INVERTED_SLAB_VACUUM_MARGIN_ANG:
+        if vacuum_below > vacuum_above + SLAB_VACUUM_FACE_MARGIN_ANG:
             logger.warning(
                 "Slab has more vacuum below the substrate (%.1f A) than above "
                 "(%.1f A); re-aligning to bottom-anchored layout with vacuum "
@@ -326,7 +326,11 @@ def validate_substrate(
 
     z_min = float(np.min(pos[:, 2]))
     z_max = float(np.max(pos[:, 2]))
-    if material_type == "slab" and require_bottom_anchor and abs(z_min) > 0.05:
+    if (
+        material_type == "slab"
+        and require_bottom_anchor
+        and abs(z_min) > DEFAULT_BOTTOM_ANCHOR_MAX_OFFSET_ANG
+    ):
         raise GeometryValidationError(
             f"Substrate is not bottom-anchored (min(z)={z_min:.3f} A; expected ~0). "
             "Call ensure_slab_z_alignment during substrate preparation."
@@ -787,8 +791,10 @@ def _rank_alloy_variants(
     variants: list[Atoms],
     *,
     calculator,
+    keep_last_without_calculator: bool = False,
+    context: str = "Variant",
 ) -> tuple[float, Atoms | None, BaseException | None]:
-    """Pick the lowest-energy alloy variant; batch via TorchSim when available."""
+    """Pick the lowest-energy variant; batch via TorchSim when available."""
     best_energy = float("inf")
     best_atoms: Atoms | None = None
     ranking_failure: BaseException | None = None
@@ -800,12 +806,14 @@ def _rank_alloy_variants(
         try:
             results = batch_static(variants, ts_model, require_energy=False)
         except (RuntimeError, MemoryError, OSError, DependencyMissingError) as exc:
-            logger.warning("Batched alloy variant scoring failed: %s", exc)
+            logger.warning("Batched %s scoring failed: %s", context.lower(), exc)
             ranking_failure = exc
         else:
             for v, (energy, _forces) in enumerate(results):
                 if energy is None or not np.isfinite(energy):
-                    logger.warning("Variant %d failed: non-finite energy %s", v, energy)
+                    logger.warning(
+                        "%s %d failed: non-finite energy %s", context, v, energy
+                    )
                     continue
                 if energy < best_energy:
                     best_energy = float(energy)
@@ -819,7 +827,8 @@ def _rank_alloy_variants(
             calculator=calculator,
             best_energy=best_energy,
             best_atoms=best_atoms,
-            context=f"Variant {v}",
+            context=f"{context} {v}",
+            keep_last_without_calculator=keep_last_without_calculator,
         )
         if ranking_failure is None and err is not None:
             ranking_failure = err
@@ -1155,12 +1164,14 @@ def deposit_adatoms(
     min_adatom_separation = float(min_adatom_separation)
 
     rng = np.random.RandomState(seed)
-    best_energy = float("inf")
-    best_atoms = None
+    relaxed_variants: list[Atoms] = []
 
     pbc = list(material_aware_pbc(slab.material_type))
-    image_offsets = _periodic_image_offsets(
-        cell, np.asarray(pbc, dtype=bool), min_adatom_separation
+    image_offsets = np.asarray(
+        _periodic_image_offsets(
+            cell, np.asarray(pbc, dtype=bool), min_adatom_separation
+        ),
+        dtype=float,
     )
 
     for v in range(n_variants):
@@ -1179,16 +1190,18 @@ def deposit_adatoms(
                 else np.array([0.0, 0.0, 1.0])
             )
             pos = site.xyz + float(adsorption_height) * normal
-            too_close = False
-            for acc in accepted:
+            if accepted:
+                acc = np.asarray(accepted, dtype=float)
+                deltas = (
+                    pos.reshape(1, 1, 3)
+                    - acc.reshape(-1, 1, 3)
+                    - image_offsets.reshape(1, -1, 3)
+                )
                 if (
-                    np.min([np.linalg.norm(pos - (acc + off)) for off in image_offsets])
+                    float(np.min(np.linalg.norm(deltas, axis=-1)))
                     < min_adatom_separation
                 ):
-                    too_close = True
-                    break
-            if too_close:
-                continue
+                    continue
             accepted.append(pos)
             if len(accepted) >= n_place:
                 break
@@ -1221,14 +1234,14 @@ def deposit_adatoms(
                 steps=steps,
                 context=f"deposit_adatoms variant {v}",
             )
-        best_energy, best_atoms, _ = _consider_variant(
-            candidate,
-            calculator=calculator,
-            best_energy=best_energy,
-            best_atoms=best_atoms,
-            context=f"Adatom variant {v}",
-            keep_last_without_calculator=True,
-        )
+        relaxed_variants.append(candidate)
+
+    best_energy, best_atoms, _ = _rank_alloy_variants(
+        relaxed_variants,
+        calculator=calculator,
+        keep_last_without_calculator=True,
+        context="Adatom variant",
+    )
 
     if best_atoms is None:
         raise GeometryValidationError(

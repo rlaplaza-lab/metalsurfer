@@ -4,33 +4,17 @@ Development
 Setup
 -----
 
-Requires **Python 3.12 or newer**.
+Install the library from :doc:`quickstart` (PyPI, editable, and the MLIP extra).
+This page only adds the developer extra.
 
-From PyPI::
-
-   pip install metalsurfer
-   pip install "metalsurfer[mlip]"
-
-Core install from a clone (library import and CPU-only workflow tests):
-
-.. code-block:: bash
-
-   pip install -e .
-
-Running ``examples/``, ``scripts/``, or any ``run_*`` campaign requires the MLIP
-stack:
-
-.. code-block:: bash
-
-   pip install -e ".[mlip]"
-
-Developer tooling (ruff, mypy, pytest, coverage):
+Developer tooling (ruff, mypy, pytest, coverage), which is what CI's lint and
+quick-test jobs install:
 
 .. code-block:: bash
 
    pip install -e ".[dev]"
 
-For TorchSim/FairChem-backed relaxation plus dev tools:
+For TorchSim/FairChem-backed relaxation plus those tools:
 
 .. code-block:: bash
 

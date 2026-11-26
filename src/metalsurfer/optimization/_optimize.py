@@ -16,7 +16,13 @@ import numpy as np
 from ase import Atoms
 
 from .._logging import torchsim_output_capture
-from .._numeric_defaults import DEFAULT_FMAX
+from .._numeric_defaults import (
+    DEFAULT_DEVICE,
+    DEFAULT_DISPERSION,
+    DEFAULT_FMAX,
+    DEFAULT_MODEL_NAME,
+    DEFAULT_TASK_NAME,
+)
 from ..config import AdsorptionConfig
 from ..exceptions import DependencyMissingError
 from ..surface_prep.freeze import frozen_indices_from_constraints
@@ -142,11 +148,11 @@ def _prepare_relaxation(
 
 
 def setup_single_model(  # pragma: no cover - requires MLIP stack / GPU
-    model_name: str = "uma-s-1p2",
-    device: str = "cuda",
-    task_name: str = "oc25",
+    model_name: str = DEFAULT_MODEL_NAME,
+    device: str = DEFAULT_DEVICE,
+    task_name: str = DEFAULT_TASK_NAME,
     *,
-    dispersion: str = "none",
+    dispersion: str = DEFAULT_DISPERSION,
 ):
     """Create a single FairChemModel shared by calculator and TorchSim.
 
@@ -994,7 +1000,13 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
                 )
                 out.append(None)
                 continue
-            calc = TorchSimCalculator(ts_model)
+            calc = TorchSimCalculator(
+                ts_model,
+                model_name=config.model_name,
+                device=model_device,
+                task_name=config.task_name,
+                dispersion=config.dispersion,
+            )
             calc.results["energy"] = energy_val
             calc.results["forces"] = forces_i
             calc._last_positions_hash = _positions_cell_hash(atoms)

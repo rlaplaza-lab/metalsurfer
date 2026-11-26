@@ -426,12 +426,14 @@ def _enumerate_unified_sites(
     atom_indices = list(batch.atom_indices)
     normals = batch.normals
     clearances = batch.clearances
-    local_tree = periodic_accessibility_tree(
-        positions,
-        cell,
-        pbc_for_sites,
-        float(max_site_distance),
-    )
+    local_tree = batch.accessibility_tree
+    if local_tree is None:
+        local_tree = periodic_accessibility_tree(
+            positions,
+            cell,
+            pbc_for_sites,
+            float(max_site_distance),
+        )
 
     if len(vertices) == 0:
         logger.warning(

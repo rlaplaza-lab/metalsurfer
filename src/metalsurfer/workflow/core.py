@@ -108,9 +108,6 @@ def process_molecule(
     ) -> MoleculeScreenOutcome:
         return MoleculeScreenOutcome(results=results, failure_summary=failure)
 
-    if reference_smiles is None:
-        reference_smiles = smiles
-
     with log_context(
         molecule=molecule_name,
         surface_type=surface_type,
@@ -125,7 +122,7 @@ def process_molecule(
             config.seed,
         )
 
-        ctx, early_failure = _prepare_molecule_screening(
+        ctx, early_failure, reference_smiles = _prepare_molecule_screening(
             smiles=smiles,
             molecule_name=molecule_name,
             slab=slab,
@@ -143,6 +140,7 @@ def process_molecule(
             site_context=site_context,
             surface_type=surface_type,
             debug_sites_step=debug_sites_step,
+            reference_smiles=reference_smiles,
         )
         if ctx is None:
             assert early_failure is not None

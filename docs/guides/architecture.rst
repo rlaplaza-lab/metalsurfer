@@ -798,16 +798,16 @@ Run modes
 
 Standard screening
 ~~~~~~~~~~~~~~~~~~
-``adsorption``): enumerate, relax every sampled candidate, return survivors.
+``adsorption`` — enumerate, relax every sampled candidate, return survivors.
 
 Bayesian screening
 ~~~~~~~~~~~~~~~~~~
-``adsorption_bo``): surrogate-guided loop over the discrete pool with
+``adsorption_bo`` — surrogate-guided loop over the discrete pool with
 geometry-aware features (see above).
 
 Sequential saturation
 ~~~~~~~~~~~~~~~~~~~~~
-``saturation``): screen → optional topology guard → commit best
+``saturation`` — screen → optional topology guard → commit best
 ``Ω < 0`` → refresh slab → repeat until unbound or no placements.
 ``Ω = E_ads − k_B T ln(a_i p / p°)`` (SATP defaults recover ``E_ads``; see
 :doc:`configuration`). ``multi_molecule_saturation=True``: all molecules
@@ -821,7 +821,7 @@ before mixtures (largest-remainder shares), and ranks packs by
 
 BO saturation
 ~~~~~~~~~~~~~
-``saturation_bo``): same loop with BO placement selection and optional
+``saturation_bo`` — same loop with BO placement selection and optional
 transfer. Reservoir ``Ω`` ranking is on the shared commit/stop path;
 sequential ``observed_y`` is electronic ``E_ads``, while joint n-tuplet BO
 (single adsorbate) labels with ``Ω/n``. Competitive multi-molecule n-tuplet

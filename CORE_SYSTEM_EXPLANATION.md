@@ -26,8 +26,9 @@ E_ads = E_adslab - E_slab - E_molecule
 ```
 
 A negative `E_ads` means the molecule prefers to be on the surface. In coverage
-mode the loop stops the moment the next molecule would *cost* energy to adsorb
-(`E_ads >= 0`).
+mode the loop stops when the next molecule is unbound on the ranking energy
+(`Ω >= 0`). `Ω = E_ads − k_B T ln(a · p / p°)`; SATP defaults make `Ω` equal
+`E_ads`.
 
 ## How to enter
 
@@ -171,9 +172,7 @@ away from the material) and a *site type*. The site types are:
 - `atop` — directly above a single surface atom;
 - `bridge` — above the midpoint between two surface atoms;
 - `hollow` — above a gap surrounded by three or four surface atoms;
-- `pore` — inside the open void of a framework, far from any wall (only porous);
-- `envelope` — a generic "just outside the surface" point;
-- `unknown` — could not be classified.
+- `pore` — inside the open void of a framework, far from any wall (only porous).
 
 Sites are labelled by looking at the distances from the candidate point to the
 nearest surface atoms: if the nearest atom is far closer than the second, it is
@@ -428,8 +427,9 @@ Two further behaviours:
   conformer energies are available, the slots are allocated across conformers in
   proportion to `exp(-(E_i - E_min) / (k_B * T))` using `boltzmann_temperature`.
   Higher temperature flattens the preference toward uniform; lower temperature
-  concentrates on the lowest-energy conformers. If energies are missing the code
-  silently falls back to the uniform draw.
+  concentrates on the lowest-energy conformers. If energies are missing, the
+  wrong length, or unusable, the code logs a warning and falls back to the
+  uniform draw.
 - **Conformer-count budgeting across molecules.** The function
   `estimate_conformer_count` scores each molecule by its conformer count
   (floor of 1), and `distribute_placement_budget` splits the total placement
@@ -540,8 +540,9 @@ with `enable_dissociative_placement` (usually together with
 `skip_topology_check`, so the connectivity filters allow a fragmented adsorbate).
 
 It applies only to *homonuclear diatomics* (two identical atoms, e.g. H₂, O₂,
-N₂) on `slab` or `nanoparticle` (not porous). The code pairs up nearby hollow /
-pore sites and places one fragment atom at each. The separation between the two
+N₂) on `slab`, `nanoparticle`, or `porous`. The code pairs nearby wall `hollow`
+and `bridge` sites (not void `pore` sites) and places one fragment atom at each.
+The separation between the two
 fragments is chosen adaptively: a minimum set by the atoms' covalent radii and a
 maximum set by the spacing between neighbouring hollow sites, clipped to a sane
 range. The resulting geometry is stored not just as xyz but with an explicit

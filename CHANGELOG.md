@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Optional positive config fields (``max_initial_distance``,
+  ``voronoi_probe_radius``, ``autobatcher_max_memory_scaler``) and
+  ``bo.ucb_kappa`` reject NaN and non-finite values, same as the other
+  numeric checks.
+- Choice allow-lists (``*_OPTIONS``) are derived from the field ``Literal``
+  aliases. An unknown campaign kind uses the same ``must be a, b, or c``
+  message as the other choice checks.
+- ``SiteCandidateBatch`` no longer carries ``has_topology_atop`` or
+  ``topology_median_nn``. Enumeration uses the plugin accessibility tree
+  when the plugin built one.
+- Model, task, device, dispersion, relaxation-step, and placement-z defaults
+  are the shared constants in ``metalsurfer._numeric_defaults``. Quick CI
+  and the PyPI publish test job install with ``pip install -e ".[dev]"``.
 - Substrate helpers take ``substrate`` instead of ``slab`` as the
   substrate-parameter name: ``coerce_substrate``, ``finalize_substrate``,
   ``relax_substrate``, ``resize_substrate_for_molecule``,
@@ -41,7 +54,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``RMSD_DEDUP_THRESHOLD_DEFAULT_ANGSTROM``,
   ``ENERGY_DEDUP_THRESHOLD_DEFAULT_EV``, and ``DEFAULT_SLAB_TOP_VACUUM_ANG``.
   Config fields and helper kwarg defaults share one value per knob.
-  Cumulative-refit ``weight_cap`` stays ``0.5``.
+  Cumulative-refit library defaults stay
+  ``BO_CUMULATIVE_REFIT_WEIGHT_CAP_DEFAULT`` (``0.5``) and
+  ``BO_CUMULATIVE_REFIT_PROXIMITY_FLOOR_DEFAULT`` (``0.05``). Campaigns pass
+  ``bo.transfer`` (weight cap ``0.35``, proximity floor ``0.0``) instead.
 - An empty adsorption campaign worklist emits a ``UserWarning`` only.
   Saturation still logs the same message with ``logger.warning``.
 - Unknown campaign ``config:`` keys are reported together in one error, each
