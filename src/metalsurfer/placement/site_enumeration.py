@@ -912,10 +912,8 @@ def _get_site_surface_radii(
             list(indices),
             _SURFACE_COVALENT_RADIUS_FALLBACK,
         )
-    return _mean_covalent_radius(
-        site_symbols,
-        fallback=_SURFACE_COVALENT_RADIUS_FALLBACK,
-    )
+        return float(_SURFACE_COVALENT_RADIUS_FALLBACK)
+    return _mean_covalent_radius(site_symbols)
 
 
 def _compute_site_z_base(
