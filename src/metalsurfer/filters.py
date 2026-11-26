@@ -156,6 +156,9 @@ def _bond_counts_from_dist(
     return bonds
 
 
+_UNPARSED_REFERENCE = object()
+
+
 def _mol_from_smiles(smiles: str):
     """Parse SMILES to an RDKit mol with Hs, or None if rdkit missing or parse fails."""
     if Chem is None:
@@ -435,6 +438,7 @@ def check_decomposition(
     adsorbate_prefix_atoms: int | None = None,
     *,
     material_type: str,
+    reference_mol: object | None = _UNPARSED_REFERENCE,
 ) -> tuple[bool, str]:
     """Return ``(ok, reason)`` indicating whether the adsorbate decomposed.
 
@@ -459,6 +463,8 @@ def check_decomposition(
         When set, only ``atoms[adsorbate_prefix_atoms:]`` is checked.
     material_type
         Geometric PBC via :func:`material_aware_pbc` (see :func:`check_desorption`).
+    reference_mol
+        Parsed reference, or ``None`` when parsing already failed. Omit to parse.
     """
     if adsorbate_prefix_atoms is not None:
         if adsorbate_prefix_atoms < 0 or adsorbate_prefix_atoms > len(atoms):
@@ -491,7 +497,11 @@ def check_decomposition(
             "pip install rdkit",
         )
 
-    ref_mol = _mol_from_smiles(reference_smiles)
+    ref_mol = (
+        _mol_from_smiles(reference_smiles)
+        if reference_mol is _UNPARSED_REFERENCE
+        else reference_mol
+    )
     if ref_mol is not None:
         ref_formula = _formula_from_mol(ref_mol)
         ref_bonds = _bond_counts_from_mol(ref_mol)
@@ -895,9 +905,18 @@ def filter_results(
 
     if not config.skip_topology_check:
         prefix = len(slab)
-        ref_formula = (
-            _formula_from_smiles(reference_smiles) if reference_smiles else None
-        )
+        ref_mol: object | None = None
+        if reference_smiles:
+            if Chem is None:
+                raise DependencyMissingError(
+                    "rdkit",
+                    "check_decomposition",
+                    "pip install rdkit",
+                )
+            ref_mol = _mol_from_smiles(reference_smiles)
+            ref_formula = _formula_from_mol(ref_mol) if ref_mol is not None else None
+        else:
+            ref_formula = None
         if ref_formula is not None:
             expected_suffix = sum(ref_formula.values())
             for entry in results:
@@ -920,6 +939,7 @@ def filter_results(
                 connectivity_multiplier=config.connectivity_multiplier,
                 adsorbate_prefix_atoms=prefix,
                 material_type=material_type,
+                reference_mol=ref_mol,
             )
 
         results = _run_filter_phase(

@@ -6,6 +6,12 @@ Writers and CSV row builders must agree on the layout under
 
 from pathlib import Path
 
+ADSORPTION_ENERGIES_DETAILED_CSV = "adsorption_energies_detailed.csv"
+ADSORPTION_ENERGY_SUMMARY_CSV = "adsorption_energy_summary.csv"
+SATURATION_SUMMARY_CSV = "saturation_summary.csv"
+SATURATION_DETAILS_CSV = "saturation_details.csv"
+SATURATION_PLACEMENTS_DETAILED_CSV = "saturation_placements_detailed.csv"
+
 
 def results_dir_or_manual(surface_type: str | None) -> str:
     """Return ``results_{surface_type}``, or ``results_manual`` when unset."""

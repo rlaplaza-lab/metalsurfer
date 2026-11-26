@@ -12,9 +12,9 @@ from metalsurfer.filters import (
     lateral_contact_shell,
     min_interadsorbate_covalent_ratio,
 )
-from metalsurfer.models import ReferenceEnergies
+from metalsurfer.models import BOTransferInfo, ReferenceEnergies
 from metalsurfer.placement.geometry import occupied_neighbor_counts
-from metalsurfer.reporting import PlacementFailure
+from metalsurfer.reporting import ConformerFailure, PlacementFailure
 from metalsurfer.surface_prep import Substrate
 from metalsurfer.workflow import composite as composite_mod
 from metalsurfer.workflow import joint_tuplet as joint_tuplet_mod
@@ -28,6 +28,7 @@ from metalsurfer.workflow.joint_tuplet import (
     _assemble_bo_joint_groups_from_specs,
     _composition_budgets,
     _composition_funding_order,
+    commit_best_joint_config,
     enumerate_tuplet_compositions,
     process_joint_tuplet_bayesian,
     screen_joint_tuplet_homogeneous,
@@ -830,3 +831,52 @@ def test_process_joint_tuplet_bayesian_uses_ctx_conformer_energies(monkeypatch):
     )
     assert captured["conformer_energies"] == [0.12]
     assert out.valid_configs == []
+
+
+def test_joint_bo_early_failure_includes_transfer_info(monkeypatch):
+    failure = ConformerFailure(reason="could not generate conformers for water")
+    monkeypatch.setattr(
+        "metalsurfer.workflow.joint_tuplet._prepare_molecule_screening",
+        lambda **_k: (None, failure, "O"),
+    )
+    out = process_joint_tuplet_bayesian(
+        "O",
+        "water",
+        Substrate(make_slab(), material_type="slab"),
+        calculator=None,
+        reference_energies=ReferenceEnergies(
+            slab_energy=0.0, molecule_energies={"water": -1.0}
+        ),
+        config=AdsorptionConfig(saturation_molecules_per_step=2),
+    )
+    assert out.failure_summary is failure
+    assert isinstance(out.transfer_info, BOTransferInfo)
+    assert out.valid_configs == []
+
+
+def test_commit_best_joint_config_missing_activity_names_the_molecule():
+    row = make_screening_result(
+        molecule="water",
+        placement_id=0,
+        energy_adsorption=-1.0,
+        atoms=make_slab(),
+        slab_size=1,
+        distance=2.5,
+        placement_descriptor=make_placement_descriptor(placement_id=0),
+    )
+    best, committed, ranked = commit_best_joint_config(
+        [[row]],
+        activity_by_molecule={"water": 1.0},
+        temperature=298.15,
+        pressure=1.0,
+    )
+    assert best is row
+    assert committed == [row]
+    assert ranked == [row]
+    with pytest.raises(KeyError, match="missing saturation activity"):
+        commit_best_joint_config(
+            [[row]],
+            activity_by_molecule={},
+            temperature=298.15,
+            pressure=1.0,
+        )

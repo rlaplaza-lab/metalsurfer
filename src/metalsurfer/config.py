@@ -17,6 +17,7 @@ from ._numeric_defaults import (
     BO_TRANSFER_WEIGHT_CAP_DEFAULT,
     CONTACT_COVALENT_SCALE_DEFAULT,
     CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM,
+    DEFAULT_BO_SIMILARITY_LENGTHSCALE,
     DEFAULT_DEVICE,
     DEFAULT_DISPERSION,
     DEFAULT_FMAX,
@@ -32,6 +33,7 @@ from ._numeric_defaults import (
     DEFAULT_TASK_NAME,
     DEFAULT_TOP_LAYER_TOLERANCE,
     DEFAULT_TRANSFER_EXPLORATION_FRACTION,
+    DEFAULT_UCB_KAPPA,
     ENERGY_DEDUP_THRESHOLD_DEFAULT_EV,
     MIN_ADSORBATE_SEPARATION_DEFAULT_ANGSTROM,
     MIN_CONTACT_RATIO_DEFAULT,
@@ -61,6 +63,13 @@ BOSurrogate = Literal[
     "gaussian_process",
     "ensemble",
 ]
+BOTransferCapableSurrogate = Literal[
+    "random_forest",
+    "extra_trees",
+    "gradient_boost",
+    "ridge",
+    "ensemble",
+]
 DispersionSetting = Literal["none", "d3"]
 ConformerWeighting = Literal["uniform", "boltzmann"]
 SiteClassificationMethod = Literal["auto", "distance_ratio", "delaunay"]
@@ -84,8 +93,8 @@ BO_TRANSFER_MODE_OPTIONS: tuple[str, ...] = _choice_options(BOTransferMode)
 BO_ACQUISITION_OPTIONS: tuple[str, ...] = _choice_options(BOAcquisition)
 BO_INITIAL_SAMPLING_OPTIONS: tuple[str, ...] = _choice_options(BOInitialSampling)
 BO_SURROGATE_OPTIONS: tuple[str, ...] = _choice_options(BOSurrogate)
-BO_TRANSFER_CAPABLE_SURROGATES: tuple[str, ...] = tuple(
-    name for name in BO_SURROGATE_OPTIONS if name != "gaussian_process"
+BO_TRANSFER_CAPABLE_SURROGATES: tuple[str, ...] = _choice_options(
+    BOTransferCapableSurrogate
 )
 TS_OPTIMIZER_OPTIONS: tuple[str, ...] = _choice_options(TSOptimizer)
 SLAB_RELAXATION_MODE_OPTIONS: tuple[str, ...] = _choice_options(SLAB_RELAXATION_MODE)
@@ -110,7 +119,7 @@ class BOTransferConfig:
     mode: BOTransferMode = "weighted"
     min_step_observations: int = 5
     weight_cap: float = BO_TRANSFER_WEIGHT_CAP_DEFAULT
-    similarity_lengthscale: float = 4.0
+    similarity_lengthscale: float = DEFAULT_BO_SIMILARITY_LENGTHSCALE
     min_similarity: float = BO_TRANSFER_MIN_SIMILARITY_DEFAULT
     trust_patience: int = BO_TRANSFER_TRUST_PATIENCE_DEFAULT
     mae_tolerance: float = 0.05
@@ -129,7 +138,7 @@ class BOConfig:
     initial_sampling: BOInitialSampling = "spread_xyz"
     batch_size: int | None = None
     total_batches: int = 18
-    ucb_kappa: float = 1.96
+    ucb_kappa: float = DEFAULT_UCB_KAPPA
     acquisition: BOAcquisition = "pi"
     surrogate: BOSurrogate = "gradient_boost"
     n_estimators: int = 100

@@ -111,7 +111,7 @@ def _parse_context_field(spec: _ContextField, value: Any) -> Any:
         return float(value)
     if spec.kind == "bool":
         return _parse_bool(value, default=True)
-    return _parse_float_pair(value, default=(0.7, 1.25))
+    return _parse_float_pair(value, default=DEFAULT_PLACEMENT_Z_RANGE)
 
 
 def _require_descriptor_pose(

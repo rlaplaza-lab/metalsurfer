@@ -7,7 +7,7 @@ import time
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Any, Protocol
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -58,7 +58,12 @@ from ..reporting import (
     FilterFailure,
     ReferenceFailure,
 )
-from ..result_paths import results_dir_for, results_dir_or_manual
+from ..result_paths import (
+    ADSORPTION_ENERGIES_DETAILED_CSV,
+    SATURATION_SUMMARY_CSV,
+    results_dir_for,
+    results_dir_or_manual,
+)
 from ..surface_prep import Substrate, accept_substrate_for_api, apply_material_pbc
 from ..surface_prep._surfaces import validate_substrate_conformer_sizing
 from ..surface_prep.freeze import (
@@ -702,8 +707,9 @@ def _finalize_screen_results(
     return filtered, t_filtering, filter_failure, duplicates
 
 
-class _BOPoolView(Protocol):
-    """Attributes both BO callers read off a prepared candidate pool."""
+@dataclass(frozen=True)
+class _PreparedBOPool:
+    """Shared BO candidate pool after enumeration and geometry-aware features."""
 
     all_specs: list[Any]
     candidate_features: pd.DataFrame
@@ -718,7 +724,7 @@ class _BOPoolView(Protocol):
 class BOPoolStage:
     """Prepared BO candidate pool plus enumeration diagnostics."""
 
-    pool: _BOPoolView | None
+    pool: _PreparedBOPool | None
     max_enumerated_specs: int
     n_candidate_specs: int
     grid_info: Any | None
@@ -1560,10 +1566,10 @@ def _select_molecules_for_processing(
         existing_molecules: set[str] = set()
         summary_columns: tuple[str, ...]
         if skip_saturation_file:
-            summary = f"{results_dir}/saturation_summary.csv"
+            summary = f"{results_dir}/{SATURATION_SUMMARY_CSV}"
             summary_columns = ("molecules", "molecule")
         else:
-            summary = f"{results_dir}/adsorption_energies_detailed.csv"
+            summary = f"{results_dir}/{ADSORPTION_ENERGIES_DETAILED_CSV}"
             summary_columns = ("molecule",)
         try:
             existing_df = pd.read_csv(summary)

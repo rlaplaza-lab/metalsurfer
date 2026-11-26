@@ -12,6 +12,7 @@ from ase import Atoms
 from sklearn.preprocessing import StandardScaler
 
 from ..config import (
+    BO_TRANSFER_CAPABLE_SURROGATES,
     AdsorptionConfig,
     resolved_bo_eval_budget,
 )
@@ -53,6 +54,7 @@ from .shared import (
     _finalize_screen_results,
     _prepare_bo_pool_stage,
     _prepare_molecule_screening,
+    _PreparedBOPool,
     _summarize_failure_events,
     _unique_relaxed_message,
 )
@@ -60,17 +62,13 @@ from .shared import (
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class _PreparedBOPool:
-    """Shared BO candidate pool after enumeration and geometry-aware features."""
-
-    all_specs: list[Any]
-    candidate_features: pd.DataFrame
-    valid_spec_indices: list[int]
-    scaled_candidate_features: np.ndarray
-    materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]]
-    pid_to_pool_position: dict[int, int]
-    sigma_scale: np.ndarray
+def _require_transfer_surrogate(name: str) -> TransferCapableSurrogateType:
+    if name not in BO_TRANSFER_CAPABLE_SURROGATES:
+        raise ValueError(
+            f"surrogate {name!r} is not transfer-capable "
+            f"({', '.join(BO_TRANSFER_CAPABLE_SURROGATES)})"
+        )
+    return cast(TransferCapableSurrogateType, name)
 
 
 def prepare_bo_pool(
@@ -311,7 +309,7 @@ def _build_round_surrogate(
             y_current,
             transfer_memory.observed_X_rows,
             transfer_memory.observed_y,
-            surrogate=cast(TransferCapableSurrogateType, config.bo.surrogate),
+            surrogate=_require_transfer_surrogate(config.bo.surrogate),
             n_estimators=config.bo.n_estimators,
             random_state=config.seed,
             n_jobs=config.n_jobs,
@@ -329,7 +327,7 @@ def _build_round_surrogate(
             y_current,
             transfer_memory.observed_X_rows,
             transfer_memory.observed_y,
-            surrogate=cast(TransferCapableSurrogateType, config.bo.surrogate),
+            surrogate=_require_transfer_surrogate(config.bo.surrogate),
             n_estimators=config.bo.n_estimators,
             random_state=config.seed,
             n_jobs=config.n_jobs,

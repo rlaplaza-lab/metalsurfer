@@ -9,7 +9,6 @@ import logging
 import math
 from collections import Counter
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from itertools import groupby
 from typing import Literal
@@ -31,7 +30,7 @@ from ._constants import (
     _SITE_NEIGHBOR_ABS_TOL_ANGSTROM,
 )
 from ._material import material_aware_pbc
-from ._parallel import resolve_materialize_workers
+from ._parallel import parallel_map, resolve_materialize_workers
 from .clash import atom_radii_for_symbols
 from .dissociative import (
     _generate_dissociative_placement_from_spec,
@@ -149,15 +148,7 @@ def generate_placements_from_specs(
         if config.placement_materialize_workers is not None
         else config.n_jobs
     )
-    n_workers = resolve_materialize_workers(
-        workers_setting,
-        n_tasks=len(specs),
-    )
-    if n_workers == 1 or len(specs) == 1:
-        return [_one(spec) for spec in specs]
-
-    with ThreadPoolExecutor(max_workers=n_workers) as pool:
-        return list(pool.map(_one, specs))
+    return parallel_map(_one, specs, n_jobs=workers_setting, min_tasks=2)
 
 
 @dataclass

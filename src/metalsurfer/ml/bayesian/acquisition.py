@@ -14,6 +14,7 @@ from ..._numeric_defaults import (
     ACQUISITION_SIGMA_FLOOR,
     ACQUISITION_XI_DEFAULT,
     DEFAULT_SEED,
+    DEFAULT_UCB_KAPPA,
 )
 from ...config import (
     BO_INITIAL_SAMPLING_OPTIONS,
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 def lcb_scores(
     mu: np.ndarray,
     sigma: np.ndarray,
-    kappa: float = 1.96,
+    kappa: float = DEFAULT_UCB_KAPPA,
 ) -> np.ndarray:
     """Lower confidence bound for minimisation: mu - kappa * sigma.
 
@@ -505,7 +506,7 @@ def score_and_select(
     model: Pipeline,
     candidate_features: pd.DataFrame,
     batch_size: int,
-    kappa: float = 1.96,
+    kappa: float = DEFAULT_UCB_KAPPA,
     evaluated_indices: set[int] | None = None,
     acquisition: AcquisitionType = "lcb",
     f_best: float | None = None,

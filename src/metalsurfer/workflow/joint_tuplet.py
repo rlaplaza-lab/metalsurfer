@@ -56,6 +56,7 @@ from .shared import (
     _prepare_molecule_screening,
     adsorption_ranking_energy,
     joint_config_ranking_energy,
+    require_saturation_activity,
 )
 
 logger = logging.getLogger(__name__)
@@ -204,7 +205,7 @@ def commit_best_joint_config(
         key=lambda r: (
             adsorption_ranking_energy(
                 r.energy_adsorption,
-                activity_by_molecule[r.molecule],
+                require_saturation_activity(r.molecule, activity_by_molecule),
                 temperature,
                 pressure,
             ),
@@ -644,25 +645,31 @@ def _assemble_bo_joint_groups_from_specs(
             stubs[pos] = _stub_from_pool(pos)
         return stubs[pos]
 
+    n_pool = len(valid_spec_indices)
+    if catalog is None:
+        for pos in range(n_pool):
+            stubs[pos] = _stub_from_pool(pos)
+
     for anchor_pos in anchor_indices:
         if anchor_pos in committed:
             continue
-        anchor = _stub_from_pool(anchor_pos)
+        if anchor_pos not in stubs:
+            stubs[anchor_pos] = _stub_from_pool(anchor_pos)
+        anchor = stubs[anchor_pos]
         if anchor is None:
             continue
         group: list[ScreeningResult] = [anchor]
         tentative: set[int] = {anchor_pos}
         candidates = [
-            p
-            for p in range(len(valid_spec_indices))
-            if p not in committed and p not in tentative
+            p for p in range(n_pool) if p not in committed and p not in tentative
         ]
-        stubs = {anchor_pos: anchor}
         if catalog is None:
-            for pos in candidates:
-                stubs[pos] = _stub_from_pool(pos)
             positions = _site_positions(
-                [stub for stub in stubs.values() if stub is not None]
+                [
+                    stub
+                    for pos in (anchor_pos, *candidates)
+                    if (stub := stubs[pos]) is not None
+                ]
             )
         else:
             positions = catalog
@@ -747,7 +754,12 @@ def process_joint_tuplet_bayesian(
     )
     if ctx is None:
         assert early_failure is not None
-        return JointTupletScreenOutcome([], [], failure_summary=early_failure)
+        return JointTupletScreenOutcome(
+            [],
+            [],
+            failure_summary=early_failure,
+            transfer_info=BOTransferInfo(),
+        )
 
     slab = ctx.slab
     slab_for_sites = ctx.slab_for_sites
@@ -786,6 +798,7 @@ def process_joint_tuplet_bayesian(
                 n_candidate_specs=stage.n_candidate_specs,
                 n_valid_pool=0,
             ),
+            transfer_info=BOTransferInfo(),
         )
     max_enumerated_specs = stage.max_enumerated_specs
     grid_info = stage.grid_info

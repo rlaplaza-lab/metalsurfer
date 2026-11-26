@@ -351,6 +351,7 @@ def candidates_to_arrays(
     candidates: list[CandidateSite],
     *,
     tree: KDTree,
+    compute_nn: bool = True,
 ) -> tuple[
     np.ndarray,
     np.ndarray,
@@ -372,7 +373,10 @@ def candidates_to_arrays(
     clear = np.asarray([c.clearance for c in candidates], dtype=float)
     atoms = [c.support_indices for c in candidates]
     normals = np.asarray([c.normal for c in candidates], dtype=float)
-    nn = np.asarray(tree.query(cast(Any, verts), k=1)[0], dtype=float).ravel()
+    if compute_nn:
+        nn = np.asarray(tree.query(cast(Any, verts), k=1)[0], dtype=float).ravel()
+    else:
+        nn = np.empty(0, dtype=float)
     return verts, nn, clear, atoms, normals
 
 

@@ -32,8 +32,8 @@ from ..placement.generators import (
     estimate_conformer_count,
 )
 from ..placement.site_context import site_context_for_sampling
-from ..reporting import FailureSummary
-from ..result_paths import results_dir_for
+from ..reporting import ConformerFailure, FailureSummary
+from ..result_paths import SATURATION_SUMMARY_CSV, results_dir_for
 from ..surface_prep import Substrate, apply_material_pbc
 from ..symmetry import SymmetryAnalysisError, SymmetryAnalyzer
 from .bayesian import process_molecule_bayesian
@@ -932,14 +932,14 @@ def _run_single_molecule_saturation(
         ts_model=ts_model,
         config=config,
     )
-    cached_conformers, cached_conformer_energies = (
-        pack
-        if pack is not None
-        else (
-            None,
-            None,
-        )
-    )
+    if pack is None:
+        logger.error("Could not generate conformers for %s", molecule)
+        if failure_summary_out is not None:
+            failure_summary_out[molecule] = ConformerFailure(
+                reason=f"could not generate conformers for {molecule}"
+            )
+        return None
+    cached_conformers, cached_conformer_energies = pack
 
     current_slab = Substrate(base_slab.copy(), material_type=material_type)
     steps: list[SaturationStepResult] = []
@@ -1005,9 +1005,11 @@ def _run_single_molecule_saturation(
                 )
                 transfer_info = joint_out.transfer_info
                 _commit_bo_memory_state(bo_state, joint_out.bo_memory, config=config)
+                if transfer_info is None:
+                    raise RuntimeError(
+                        f"Bayesian screening for {molecule!r} returned no transfer_info"
+                    )
             else:
-                if cached_conformers is None:
-                    raise ValueError("conformers required for joint tuplet screening")
                 joint_out = screen_joint_tuplet_homogeneous(
                     smiles=smiles,
                     molecule_name=molecule,
@@ -1026,6 +1028,8 @@ def _run_single_molecule_saturation(
                     debug_sites_step=step,
                     log_prefix=f"Saturation for {molecule} | step {step} | ",
                 )
+            if failure_summary_out is not None and joint_out.failure_summary:
+                failure_summary_out[molecule] = joint_out.failure_summary
             committed_pair = _commit_joint_step(
                 joint_out,
                 activity_by_molecule=activity_by_molecule,
@@ -1192,6 +1196,10 @@ def _run_multi_molecule_saturation(
                 "Multi-mol saturation: could not generate conformers for %s; skipping this molecule",
                 mol,
             )
+            if failure_summary_out is not None:
+                failure_summary_out[mol] = ConformerFailure(
+                    reason=f"could not generate conformers for {mol}"
+                )
             continue
         conformer_cache[mol] = pack
 
@@ -1320,6 +1328,9 @@ def _run_multi_molecule_saturation(
                 ),
                 log_prefix=f"Multi-mol saturation | step {step} | ",
             )
+            if failure_summary_out is not None and joint_out.failure_summary:
+                for mol in active_molecules:
+                    failure_summary_out[mol] = joint_out.failure_summary
             for row in joint_out.flat_results:
                 per_molecule_results[row.molecule].append(row)
             slots = joint_out.slots_by_molecule or {}
@@ -1590,7 +1601,7 @@ def run_saturation_screening(
         )
         if not molecule_pairs:
             listed_csv = (
-                results_dir_for(surface_type) / "saturation_summary.csv"
+                results_dir_for(surface_type) / SATURATION_SUMMARY_CSV
             ).as_posix()
             msg = empty_molecule_input_message(load_status, listed_csv=listed_csv)
             if msg is not None:
@@ -1660,7 +1671,9 @@ def run_saturation_screening(
         for smi, mol in zip(smiles_list, molecule_names, strict=True):
             E_mol = ref.get_molecule_energy(mol)
             if E_mol is None:
-                _missing_molecule_reference(mol, config)
+                failure = _missing_molecule_reference(mol, config)
+                if failure_summary_out is not None:
+                    failure_summary_out[mol] = failure
                 continue
 
             run_result = _run_single_molecule_saturation(

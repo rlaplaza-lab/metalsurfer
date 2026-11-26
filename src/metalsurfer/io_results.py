@@ -27,6 +27,11 @@ from .models import (
     build_molecule_summary,
 )
 from .result_paths import (
+    ADSORPTION_ENERGIES_DETAILED_CSV,
+    ADSORPTION_ENERGY_SUMMARY_CSV,
+    SATURATION_DETAILS_CSV,
+    SATURATION_PLACEMENTS_DETAILED_CSV,
+    SATURATION_SUMMARY_CSV,
     molecule_adsorbate_only_dir,
     molecule_all_vasp_dir,
     molecule_all_xyz_dir,
@@ -437,7 +442,7 @@ def save_summary_results(
 
     os.makedirs(results_dir, exist_ok=True)
 
-    detailed_path = results_dir / "adsorption_energies_detailed.csv"
+    detailed_path = results_dir / ADSORPTION_ENERGIES_DETAILED_CSV
     df = _merge_preserving_existing_molecules(detailed_path, pd.DataFrame(all_rows))
     df.to_csv(detailed_path, index=False)
 
@@ -448,7 +453,7 @@ def save_summary_results(
             summary_rows.append(summary_row)
 
     if summary_rows:
-        summary_path = results_dir / "adsorption_energy_summary.csv"
+        summary_path = results_dir / ADSORPTION_ENERGY_SUMMARY_CSV
         sdf = _merge_preserving_existing_molecules(
             summary_path, pd.DataFrame(summary_rows)
         )
@@ -493,10 +498,13 @@ def _write_saturation_csv_bundle(
         merged.to_csv(path, index=False)
 
     if detail_rows:
-        _write(f"{results_dir}/saturation_details.csv", detail_rows)
+        _write(f"{results_dir}/{SATURATION_DETAILS_CSV}", detail_rows)
     if save_all and placement_rows:
-        _write(f"{results_dir}/saturation_placements_detailed.csv", placement_rows)
-    _write(f"{results_dir}/saturation_summary.csv", summary_rows)
+        _write(
+            f"{results_dir}/{SATURATION_PLACEMENTS_DETAILED_CSV}",
+            placement_rows,
+        )
+    _write(f"{results_dir}/{SATURATION_SUMMARY_CSV}", summary_rows)
 
 
 def _write_saturation_step_bundle(

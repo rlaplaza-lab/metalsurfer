@@ -809,6 +809,13 @@ class TestTransferSmoke:
         assert result.transfer_weight_share > 0.0
         assert any("prior feature columns" in r.message for r in _captured)
 
+    def test_require_transfer_surrogate_rejects_gaussian_process(self):
+        from metalsurfer.workflow.bayesian import _require_transfer_surrogate
+
+        with pytest.raises(ValueError, match="gaussian_process"):
+            _require_transfer_surrogate("gaussian_process")
+        assert _require_transfer_surrogate("ridge") == "ridge"
+
     def test_build_transfer_surrogate_rejects_gaussian_process(self):
         X, y = _make_synthetic_training_data(20)
         with pytest.raises(ValueError, match="transfer-capable"):

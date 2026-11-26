@@ -77,6 +77,8 @@ ACQUISITION_XI_DEFAULT: float = 1e-6
 ACQUISITION_SIGMA_FLOOR: float = 1e-9
 RESIDUAL_SIGMA_DISTANCE_TEMPER: float = 0.25
 DEFAULT_TRANSFER_EXPLORATION_FRACTION: float = 0.2
+DEFAULT_BO_SIMILARITY_LENGTHSCALE: float = 4.0
+DEFAULT_UCB_KAPPA: float = 1.96  # two-sided 95% normal quantile
 # Boltzmann (eV/K) and IUPAC SATP reservoir defaults for saturation Ω ranking.
 K_B_EV_PER_K: float = 8.617e-5
 STANDARD_TEMPERATURE_K: float = 298.15

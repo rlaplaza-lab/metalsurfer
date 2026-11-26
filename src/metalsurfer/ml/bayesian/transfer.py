@@ -19,12 +19,17 @@ from ..._numeric_defaults import (
     BO_TRANSFER_MIN_SIMILARITY_DEFAULT,
     BO_TRANSFER_TRUST_PATIENCE_DEFAULT,
     BO_TRANSFER_WEIGHT_CAP_DEFAULT,
+    DEFAULT_BO_SIMILARITY_LENGTHSCALE,
     DEFAULT_N_JOBS,
     DEFAULT_SEED,
 )
 from ...config import BO_TRANSFER_CAPABLE_SURROGATES
 from ...placement._constants import _DISTANCE_ZERO_EPS
-from .surrogate import train_surrogate
+from .surrogate import (
+    _RESIDUAL_OOF_MAX_FOLDS,
+    _RESIDUAL_OOF_MIN_SAMPLES,
+    train_surrogate,
+)
 from .types import SurrogateType, TransferCapableSurrogateType
 
 logger = logging.getLogger(__name__)
@@ -241,11 +246,6 @@ def cumulative_refit_training_set(
     return X_combined, y_combined, weights
 
 
-_TRANSFER_GATE_MIN_SAMPLES = 4
-
-_TRANSFER_GATE_FOLDS = 3
-
-
 def _transfer_trust_gate(
     X_current: pd.DataFrame,
     y_current: np.ndarray,
@@ -293,13 +293,13 @@ def _transfer_trust_gate(
             n_jobs=n_jobs,
         )
 
-    if n_current < _TRANSFER_GATE_MIN_SAMPLES:
+    if n_current < _RESIDUAL_OOF_MIN_SAMPLES:
         # Tiny current sets make in-sample MAE untrustworthy; skip transfer.
         base = _get_baseline()
         base_mae = float(np.mean(np.abs(base.predict(X_current) - y_current)))
         return base_mae, base_mae, None, False
 
-    n_splits = min(_TRANSFER_GATE_FOLDS, n_current)
+    n_splits = min(_RESIDUAL_OOF_MAX_FOLDS, n_current)
     cv = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
     base_pred = np.empty(n_current, dtype=float)
     transfer_pred = np.empty(n_current, dtype=float)
@@ -620,7 +620,7 @@ def build_transfer_surrogate(
     n_estimators: int = 100,
     random_state: int = DEFAULT_SEED,
     weight_cap: float = BO_TRANSFER_WEIGHT_CAP_DEFAULT,
-    similarity_lengthscale: float = 1.0,
+    similarity_lengthscale: float = DEFAULT_BO_SIMILARITY_LENGTHSCALE,
     min_similarity: float = BO_TRANSFER_MIN_SIMILARITY_DEFAULT,
     mae_tolerance: float = 0.0,
     transfer_bad_rounds: int = 0,

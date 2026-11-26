@@ -42,6 +42,11 @@ from metalsurfer.placement.generators import (
     estimate_conformer_count,
     estimate_placement_spec_capacity,
 )
+from metalsurfer.reporting import (
+    BOPlacementFailure,
+    ConformerFailure,
+    ReferenceFailure,
+)
 from metalsurfer.surface_prep import (
     Substrate,
     auto_resize_substrate_for_molecule,
@@ -1105,6 +1110,99 @@ def test_adsorption_ranking_energy_satp_and_scaling():
     assert tuplet_ranking_energy(
         -2.0, ["A", "B"], {"A": 10.0, "B": 1.0}, STANDARD_TEMPERATURE_K, 1.0
     ) == pytest.approx(-2.0 - K_B_EV_PER_K * STANDARD_TEMPERATURE_K * np.log(10.0))
+
+
+def test_missing_reference_is_recorded(monkeypatch):
+    slab = Substrate(make_slab(), material_type="slab")
+    ref = DummyReferenceEnergies({"water": -1.0})
+    ref.get_molecule_energy = lambda _mol: None
+    _patch_saturation_mocks(
+        monkeypatch,
+        ref=ref,
+        molecule="water",
+        smiles="O",
+        process_molecule=lambda *_a, **_k: pytest.fail("screen should not run"),
+    )
+    summaries: dict = {}
+    out = run_saturation_screening(
+        slab,
+        molecules="unused.csv",
+        config=_mock_saturation_config(),
+        surface_type="missing_reference",
+        skip_existing=False,
+        failure_summary_out=summaries,
+    )
+    assert out == []
+    assert isinstance(summaries["water"], ReferenceFailure)
+    assert "water" in summaries["water"].reason
+
+
+def test_missing_conformers_are_recorded(monkeypatch):
+    slab = Substrate(make_slab(), material_type="slab")
+    _patch_saturation_mocks(
+        monkeypatch,
+        ref=DummyReferenceEnergies({"water": -1.0}),
+        molecule="water",
+        smiles="O",
+        process_molecule=lambda *_a, **_k: pytest.fail("screen should not run"),
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation.create_conformers_from_smiles",
+        lambda *_a, **_k: None,
+    )
+    summaries: dict = {}
+    out = run_saturation_screening(
+        slab,
+        molecules="unused.csv",
+        config=_mock_saturation_config(),
+        surface_type="missing_conformers",
+        skip_existing=False,
+        failure_summary_out=summaries,
+    )
+    assert out == []
+    assert isinstance(summaries["water"], ConformerFailure)
+
+
+def test_joint_bo_failure_summary_is_recorded(monkeypatch):
+    slab = Substrate(make_slab(), material_type="slab")
+    failure = BOPlacementFailure(n_candidate_specs=4, n_valid_pool=0)
+
+    def _fake_joint(*_args, **_kwargs):
+        return JointTupletScreenOutcome(
+            [],
+            [],
+            failure_summary=failure,
+            transfer_info=BOTransferInfo(),
+        )
+
+    _patch_saturation_mocks(
+        monkeypatch,
+        ref=DummyReferenceEnergies({"water": -1.0}),
+        molecule="water",
+        smiles="O",
+        process_molecule_bayesian=lambda *_a, **_k: pytest.fail(
+            "sequential BO should not run"
+        ),
+    )
+    monkeypatch.setattr(
+        "metalsurfer.workflow.saturation.process_joint_tuplet_bayesian",
+        _fake_joint,
+    )
+    summaries: dict = {}
+    out = run_saturation_screening(
+        slab,
+        molecules="unused.csv",
+        config=_mock_saturation_config(
+            saturation_molecules_per_step=2,
+            bo=BOConfig(initial_random=4, batch_size=2),
+        ),
+        surface_type="joint_bo_failure",
+        skip_existing=False,
+        failure_summary_out=summaries,
+        bo_enabled=True,
+    )
+    assert out == []
+    assert summaries["water"] is failure
 
 
 def test_resolve_saturation_activities_none_and_mismatch():

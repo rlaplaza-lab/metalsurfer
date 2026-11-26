@@ -85,6 +85,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Saturation records a missing molecule reference and a failed conformer
+  generation on ``failure_summary_out``. Both joint paths stop before the
+  step when the conformer pack is missing. Joint Bayesian early exits return
+  an empty ``BOTransferInfo``, and saturation stores the joint
+  ``failure_summary``. A finished joint BO step with no ``transfer_info``
+  raises, same as sequential BO.
+- Joint-config unit tie-break uses ``require_saturation_activity``, so a
+  missing activity is the same clear ``KeyError`` as the other Ω ranking.
+- Voronoi neighbor classification labels a site ``hollow`` only when it has
+  at least three supports. Fewer supports are ``bridge`` or ``atop``.
+- ``build_transfer_surrogate(..., similarity_lengthscale=)`` defaults to
+  ``4.0`` (``DEFAULT_BO_SIMILARITY_LENGTHSCALE``), matching
+  ``BOTransferConfig``. Acquisition ``kappa`` and ``bo.ucb_kappa`` share
+  ``DEFAULT_UCB_KAPPA`` (``1.96``).
+- Porous atop injection assigns the centroid lift only after the
+  degenerate-``None`` check, so the normal stays an ``ndarray``.
 - ``run_saturation`` and ``run_saturation_bo`` docs require ``config``.
   ``surface_type`` still defaults to ``"manual"``.
 - BO pool capacity is the ``workflow.shared`` binding of

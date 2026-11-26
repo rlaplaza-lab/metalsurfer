@@ -1173,7 +1173,9 @@ def generate_adaptive_grid_sites(
         pbc=pbc,
         target_clearance=target_c,
     )
-    verts, _nn, _clears, _, normals = candidates_to_arrays(candidates, tree=tree)
+    verts, _nn, _clears, _, normals = candidates_to_arrays(
+        candidates, tree=tree, compute_nn=False
+    )
     keep = _exposure_mask(
         verts,
         normals,
@@ -1264,7 +1266,7 @@ def generate_adaptive_grid_sites(
             pbc=pbc,
             target_clearance=target_c,
         )
-        cv, _, _, _, cn = candidates_to_arrays(child_cands, tree=tree)
+        cv, _, _, _, cn = candidates_to_arrays(child_cands, tree=tree, compute_nn=False)
         keep_c = _exposure_mask(
             cv,
             cn,

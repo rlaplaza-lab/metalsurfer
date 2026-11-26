@@ -113,8 +113,8 @@ def _bin_pair_queues(
 def _bins_are_occupancy_counts(pair_bins: Sequence[str], n_pairs: int) -> bool:
     """Report whether every *pair_bins* label is a numeric occupancy count.
 
-    One count is enough. A covered terrace where every open site has the same
-    neighbor count still has to rotate binding modes before extra tilts.
+    Every label must be numeric. One distinct count still rotates binding
+    modes before extra tilts.
     """
     if int(n_pairs) <= 0:
         return False

@@ -18,7 +18,9 @@ from metalsurfer.config import (
 from metalsurfer.ml.bayesian import (
     build_transfer_surrogate,
     ei_scores,
+    lcb_scores,
     pi_scores,
+    score_and_select,
 )
 from metalsurfer.ml.schema import ComputationContext
 from metalsurfer.placement import _constants as placement_constants
@@ -234,6 +236,23 @@ def test_numeric_defaults_single_source_of_truth():
         numeric_defaults.BO_TRANSFER_TRUST_PATIENCE_DEFAULT,
         numeric_defaults.BO_TRANSFER_WEIGHT_CAP_DEFAULT,
         numeric_defaults.BO_TRANSFER_TRUST_PATIENCE_DEFAULT,
+    )
+    assert (
+        transfer_params["similarity_lengthscale"].default
+        == numeric_defaults.DEFAULT_BO_SIMILARITY_LENGTHSCALE
+    )
+    assert (
+        transfer.similarity_lengthscale
+        == numeric_defaults.DEFAULT_BO_SIMILARITY_LENGTHSCALE
+    )
+    assert BOConfig().ucb_kappa == numeric_defaults.DEFAULT_UCB_KAPPA
+    assert (
+        inspect.signature(lcb_scores).parameters["kappa"].default
+        == numeric_defaults.DEFAULT_UCB_KAPPA
+    )
+    assert (
+        inspect.signature(score_and_select).parameters["kappa"].default
+        == numeric_defaults.DEFAULT_UCB_KAPPA
     )
 
 

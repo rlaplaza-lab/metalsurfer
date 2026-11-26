@@ -86,6 +86,30 @@ def test_classify_voronoi_site_types_for_simple_geometries():
     assert len(idx) == 3
 
 
+def test_classify_voronoi_short_neighbor_list_is_not_hollow():
+    """Fewer than three supports cannot be a hollow, even on the fallback path."""
+    site_type, idx = _classify_voronoi_site_from_neighbors(
+        np.array([1.0, 1.2]),
+        np.array([0, 1]),
+    )
+    assert site_type == "bridge"
+    assert idx == (0, 1)
+
+    site_type, idx = _classify_voronoi_site_from_neighbors(
+        np.array([1.0]),
+        np.array([4]),
+    )
+    assert site_type == "atop"
+    assert idx == (4,)
+
+    site_type, idx = _classify_voronoi_site_from_neighbors(
+        np.array([1.0, 1.2, 1.25]),
+        np.array([0, 1, 2]),
+    )
+    assert site_type == "hollow"
+    assert idx == (0, 1, 2)
+
+
 def test_voronoi_nn_distances_match_periodic_image_query_for_porous():
     porous = make_porous_framework()
     positions = porous.get_positions()

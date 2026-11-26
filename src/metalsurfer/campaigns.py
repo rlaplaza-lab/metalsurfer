@@ -27,7 +27,7 @@ from .models import (
     ScreeningResult,
 )
 from .reporting import FailureSummary
-from .result_paths import results_dir_for
+from .result_paths import ADSORPTION_ENERGIES_DETAILED_CSV, results_dir_for
 from .surface_prep import Substrate, prepare_substrate
 from .workflow import (
     process_molecule,
@@ -118,7 +118,7 @@ def _run_binding_campaign(
     )
     if not molecule_pairs:
         listed_csv = (
-            results_dir_for(surface_type) / "adsorption_energies_detailed.csv"
+            results_dir_for(surface_type) / ADSORPTION_ENERGIES_DETAILED_CSV
         ).as_posix()
         msg = empty_molecule_input_message(load_status, listed_csv=listed_csv)
         if msg is not None:

@@ -558,7 +558,9 @@ def generate_rolling_probe_sites(
     if not candidates:
         return empty
 
-    verts, _nn, _clears, _, normals = candidates_to_arrays(candidates, tree=tree)
+    verts, _nn, _clears, _, normals = candidates_to_arrays(
+        candidates, tree=tree, compute_nn=False
+    )
     n_steps = (
         int(_ROLLING_PROBE_POROUS_EXPOSURE_N_STEPS)
         if _is_3d_pbc(pbc)

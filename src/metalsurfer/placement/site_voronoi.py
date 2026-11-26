@@ -675,7 +675,12 @@ def _classify_voronoi_site_from_neighbors(
         far3 = len(dists) < 3 or float(dists[2]) / d1 > _BRIDGE_FAR_RATIO
         if far3:
             return "bridge", tuple(int(i) for i in idx[:2])
-    return "hollow", tuple(int(i) for i in idx[:3])
+    support = tuple(int(i) for i in idx[:3])
+    if len(support) >= 3:
+        return "hollow", support
+    if len(support) == 2:
+        return "bridge", support
+    return "atop", support
 
 
 def _build_delaunay_classification_index(
