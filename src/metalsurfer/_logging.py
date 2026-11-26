@@ -37,7 +37,9 @@ def log_context(**kwargs: Any):
 _warned_once: set[str] = set()
 
 
-def warn_once(logger: logging.Logger, key: str, message: str) -> None:
+def warn_once(
+    logger: logging.Logger, key: str, message: str, *args: Any, **kwargs: Any
+) -> None:
     """Emit a warning log message at most once per *key* across the process.
 
     Parameters
@@ -47,11 +49,12 @@ def warn_once(logger: logging.Logger, key: str, message: str) -> None:
     key
         Deduplication key.
     message
-        Warning message text.
+        Warning message text (printf-style; extra *args*/*kwargs* go to
+        ``logger.warning``).
     """
     if key not in _warned_once:
         _warned_once.add(key)
-        logger.warning(message)
+        logger.warning(message, *args, **kwargs)
 
 
 def _format_ctx_prefix(ctx: dict[str, Any]) -> str:

@@ -243,7 +243,7 @@ def resolve_site_context_for_sampling(
             symmetry_aware_sites = []
 
         if symmetry_aware_sites:
-            logger.info(
+            logger.debug(
                 "Using symmetry-reduced sites (%d sites)", len(symmetry_aware_sites)
             )
             result = SiteContext(

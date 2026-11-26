@@ -106,10 +106,16 @@ def radius_for_symbol(symbol: str, kind: RadiusKind) -> float:
         value = r_lo + (r_hi - r_lo) * (z_int - z_lo) / (z_hi - z_lo)
         warn_once(
             logger,
-            f"radius-fill:{kind}:{symbol}",
-            f"{label} radius for {symbol} is {value:.3f} Å, interpolated "
-            f"between {_symbol(z_lo)} ({r_lo:.3f} Å) and {_symbol(z_hi)} "
-            f"({r_hi:.3f} Å)",
+            f"radius-fill:{kind}:{symbol}:interp",
+            "%s radius for %s is %.3f Å, interpolated between %s (%.3f Å) and "
+            "%s (%.3f Å)",
+            label,
+            symbol,
+            value,
+            _symbol(z_lo),
+            r_lo,
+            _symbol(z_hi),
+            r_hi,
         )
         return float(value)
     anchor = left if left is not None else right
@@ -117,10 +123,14 @@ def radius_for_symbol(symbol: str, kind: RadiusKind) -> float:
         anchor_z, anchor_r = anchor
         warn_once(
             logger,
-            f"radius-fill:{kind}:{symbol}",
-            f"{label} radius for {symbol} is {anchor_r:.3f} Å, copied from "
-            f"{_symbol(anchor_z)} ({anchor_r:.3f} Å) "
+            f"radius-fill:{kind}:{symbol}:anchor",
+            "%s radius for %s is %.3f Å, copied from %s (%.3f Å) "
             "(one-sided fill; no second in-period anchor)",
+            label,
+            symbol,
+            anchor_r,
+            _symbol(anchor_z),
+            anchor_r,
         )
         return float(anchor_r)
     raise ValueError(

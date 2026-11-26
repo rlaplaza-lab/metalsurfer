@@ -1,7 +1,6 @@
 """Distance and clash recovery for posed adsorbates."""
 
 import dataclasses
-import logging
 import random
 
 import numpy as np
@@ -46,8 +45,6 @@ from .height import (
     _placement_normal_hat,
     _z_fraction_from_com_height,
 )
-
-logger = logging.getLogger(__name__)
 
 
 def _recover_z_offset(

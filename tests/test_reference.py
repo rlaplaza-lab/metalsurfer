@@ -240,7 +240,7 @@ class TestCalculateReferenceEnergies:
         confs = [_make_atoms()]
         _patch_reference_helpers(monkeypatch, conformers=(confs, [0.0]), opt_results=[])
 
-        with caplog.at_level(logging.ERROR):
+        with caplog.at_level(logging.WARNING):
             ref = reference.calculate_reference_energies(
                 slab,
                 calc,
@@ -252,7 +252,8 @@ class TestCalculateReferenceEnergies:
         assert ref.slab_energy == -100.0
         assert "water" not in ref.molecule_energies
         assert any(
-            "Failed to optimise any conformers for water" in rec.getMessage()
+            rec.levelno == logging.WARNING
+            and "Failed to optimise any conformers for water" in rec.getMessage()
             for rec in caplog.records
         )
 

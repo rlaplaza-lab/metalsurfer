@@ -8,6 +8,7 @@ from collections import defaultdict, deque
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
+from .._logging import warn_once
 from .._numeric_defaults import K_B_EV_PER_K
 from ..models import PlacementSpec
 from ._constants import (
@@ -786,13 +787,17 @@ def resolve_conformer_weights(
     if n_conformers < 2:
         return None
     if conformer_energies is None:
-        logger.warning(
+        warn_once(
+            logger,
+            "boltzmann:no-energies",
             "conformer_weighting='boltzmann' but no conformer energies were "
-            "supplied; using the uniform conformer draw"
+            "supplied; using the uniform conformer draw",
         )
         return None
     if len(conformer_energies) != n_conformers:
-        logger.warning(
+        warn_once(
+            logger,
+            "boltzmann:len-mismatch",
             "conformer_weighting='boltzmann': %d energies for %d conformers; "
             "using the uniform conformer draw",
             len(conformer_energies),
@@ -800,14 +805,18 @@ def resolve_conformer_weights(
         )
         return None
     if not all(math.isfinite(float(e)) for e in conformer_energies):
-        logger.warning(
+        warn_once(
+            logger,
+            "boltzmann:non-finite",
             "conformer_weighting='boltzmann': non-finite conformer energies; "
-            "affected conformers are de-prioritised (weight 0), not dropped"
+            "affected conformers are de-prioritised (weight 0), not dropped",
         )
 
     weights = _boltzmann_weights(conformer_energies, boltzmann_temperature)
     if weights is None:
-        logger.warning(
+        warn_once(
+            logger,
+            "boltzmann:degenerate",
             "conformer_weighting='boltzmann': energies are degenerate or "
             "unusable (T=%.3g K); using the uniform conformer draw",
             boltzmann_temperature,
@@ -1096,7 +1105,9 @@ def _stratified_sample(
     if weights is not None and not all(
         0 <= int(spec.conformer_index) < len(weights) for spec in specs
     ):
-        logger.warning(
+        warn_once(
+            logger,
+            "boltzmann:index-oor",
             "conformer weighting skipped: spec conformer_index out of range for "
             "%d weights; using the uniform conformer draw",
             len(weights),

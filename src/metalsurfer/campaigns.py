@@ -274,7 +274,7 @@ def run_adsorption(
         When True (default), write the full ``run_metadata.json`` (config, campaign
         fields, and timing/counts). Set False to suppress the file.
     skip_existing:
-        Skip molecules already listed in ``adsorption_energies_detailed.csv``
+        Skip molecules already listed in ``ADSORPTION_ENERGIES_DETAILED_CSV``
         (in-memory lists and CSV paths).
     run_metadata_out:
         Optional dict to populate with timing and count metadata.
@@ -333,7 +333,7 @@ def run_adsorption_bo(
     write_settings
         When True (default), write the full ``run_metadata.json``.
     skip_existing
-        Skip molecules already listed in ``adsorption_energies_detailed.csv``.
+        Skip molecules already listed in ``ADSORPTION_ENERGIES_DETAILED_CSV``.
     run_metadata_out
         Optional dict to populate with timing and count metadata.
     process_kwargs
@@ -504,7 +504,7 @@ def run_saturation(
         When True (default), write the full ``run_metadata.json`` (config, campaign
         fields, and timing/counts when available). Set False to suppress the file.
     skip_existing:
-        Skip molecules already listed in ``saturation_summary.csv``.
+        Skip molecules already listed in ``SATURATION_SUMMARY_CSV``.
     run_metadata_out:
         Optional dict populated with timing and count metadata.
 
@@ -512,7 +512,7 @@ def run_saturation(
     -----
     With ``save_results`` true, calls :func:`save_saturation_results` with the same ``config``.
     When ``config.save_benchmark_dataset`` is true, also writes
-    ``adsorption_energies_detailed.csv`` from flattened step placements.
+    ``ADSORPTION_ENERGIES_DETAILED_CSV`` from flattened step placements.
     """
     return _run_saturation_campaign(
         substrate=substrate,
@@ -558,7 +558,7 @@ def run_saturation_bo(
     write_settings
         When True (default), write the full ``run_metadata.json``.
     skip_existing
-        Skip molecules already listed in ``saturation_summary.csv``.
+        Skip molecules already listed in ``SATURATION_SUMMARY_CSV``.
     run_metadata_out
         Optional dict populated with timing and count metadata.
     """

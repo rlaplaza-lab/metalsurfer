@@ -676,7 +676,7 @@ def _classify_voronoi_site_from_neighbors(
         if far3:
             return "bridge", tuple(int(i) for i in idx[:2])
     support = tuple(int(i) for i in idx[:3])
-    if len(support) >= 3:
+    if len(support) == 3:
         return "hollow", support
     if len(support) == 2:
         return "bridge", support

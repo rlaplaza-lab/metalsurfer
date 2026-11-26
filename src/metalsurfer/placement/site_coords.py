@@ -6,6 +6,7 @@ them without importing the ``placement`` package. They are re-exported here unde
 their historical underscore names for existing call sites.
 """
 
+import logging
 from collections.abc import Sequence
 
 import numpy as np
@@ -70,6 +71,8 @@ from ._constants import (
 )
 from ._material import MATERIAL_PBC
 from .geometry import _get_covalent_radius, framework_radii_from_symbols
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     # Re-exported cell-frame geometry (see metalsurfer._geom_pbc).
@@ -554,6 +557,12 @@ def _mean_covalent_radius(
     valid = [r for r in radii if r is not None]
     if not valid:
         if fallback is not None:
+            logger.debug(
+                "No positive covalent radii for symbols %r; "
+                "using mean surface (framework) fallback %.3f Å",
+                symbols,
+                float(fallback),
+            )
             return float(fallback)
         raise ValueError(
             f"No positive covalent radii for symbols {symbols!r}; "

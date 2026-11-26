@@ -148,7 +148,7 @@ def generate_placements_from_specs(
         if config.placement_materialize_workers is not None
         else config.n_jobs
     )
-    return parallel_map(_one, specs, n_jobs=workers_setting, min_tasks=2)
+    return parallel_map(_one, specs, n_jobs=workers_setting)
 
 
 @dataclass

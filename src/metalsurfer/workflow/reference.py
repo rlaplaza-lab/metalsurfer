@@ -129,7 +129,7 @@ def calculate_reference_energies(
         )
         if result is None:
             if config.fail_on_conformer_failure:
-                raise RuntimeError(
+                raise OptimizationError(
                     f"Could not create conformers for {mol_name} from SMILES: {smiles}"
                 )
             logger.warning("Could not create %s from SMILES: %s", mol_name, smiles)
@@ -173,7 +173,7 @@ def calculate_reference_energies(
                 raise OptimizationError(
                     f"Failed to optimise any conformers for {mol_name}"
                 )
-            logger.error("Failed to optimise any conformers for %s", mol_name)
+            logger.warning("Failed to optimise any conformers for %s", mol_name)
             continue
         best_e, best_i = min(
             ((e, i) for i, (_, e) in enumerate(opt_results)),

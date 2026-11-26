@@ -4,7 +4,7 @@ import difflib
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, fields
 from math import isfinite
-from typing import Any, Literal, get_args
+from typing import Any, Literal, cast, get_args
 
 from ._numeric_defaults import (
     ADAPTIVE_GRID_DEFAULT_REFINE_LEVELS,
@@ -93,10 +93,27 @@ BO_TRANSFER_MODE_OPTIONS: tuple[str, ...] = _choice_options(BOTransferMode)
 BO_ACQUISITION_OPTIONS: tuple[str, ...] = _choice_options(BOAcquisition)
 BO_INITIAL_SAMPLING_OPTIONS: tuple[str, ...] = _choice_options(BOInitialSampling)
 BO_SURROGATE_OPTIONS: tuple[str, ...] = _choice_options(BOSurrogate)
-BO_TRANSFER_CAPABLE_SURROGATES: tuple[str, ...] = _choice_options(
-    BOTransferCapableSurrogate
+BO_TRANSFER_CAPABLE_SURROGATES: tuple[str, ...] = tuple(
+    s for s in BO_SURROGATE_OPTIONS if s != "gaussian_process"
 )
+if get_args(BOTransferCapableSurrogate) != BO_TRANSFER_CAPABLE_SURROGATES:
+    raise RuntimeError(
+        "BOTransferCapableSurrogate Literal must match "
+        "BO_TRANSFER_CAPABLE_SURROGATES derived from BOSurrogate"
+    )
 TS_OPTIMIZER_OPTIONS: tuple[str, ...] = _choice_options(TSOptimizer)
+
+
+def require_transfer_capable_surrogate(name: str) -> BOTransferCapableSurrogate:
+    """Return *name* if it is transfer-capable; otherwise raise ``ValueError``."""
+    if name not in BO_TRANSFER_CAPABLE_SURROGATES:
+        raise ValueError(
+            f"surrogate {name!r} is not transfer-capable "
+            f"({', '.join(BO_TRANSFER_CAPABLE_SURROGATES)})"
+        )
+    return cast(BOTransferCapableSurrogate, name)
+
+
 SLAB_RELAXATION_MODE_OPTIONS: tuple[str, ...] = _choice_options(SLAB_RELAXATION_MODE)
 SLAB_RELAXATION_OPTIMIZER_OPTIONS: tuple[str, ...] = _choice_options(
     SLAB_RELAXATION_OPTIMIZER

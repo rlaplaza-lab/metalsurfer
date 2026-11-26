@@ -622,15 +622,15 @@ def test_compute_site_z_base_same_formula_for_pore_site():
 
 def test_get_site_surface_radii_falls_back_when_no_positive_radius(monkeypatch, caplog):
     """No ASE symbol has radius <= 0, so patch the lookup to exercise the fallback."""
-    from metalsurfer.placement import site_enumeration as site_enum
+    from metalsurfer.placement import site_coords
     from metalsurfer.placement._constants import _SURFACE_COVALENT_RADIUS_FALLBACK
 
     slab = make_slab()
-    monkeypatch.setattr(site_enum, "_get_covalent_radius", lambda _sym: None)
-    with caplog.at_level(
-        logging.DEBUG, logger="metalsurfer.placement.site_enumeration"
-    ):
-        r_surface = _get_site_surface_radii(slab, None)
+    monkeypatch.setattr(site_coords, "_get_covalent_radius", lambda _sym: None)
+    with caplog.at_level(logging.DEBUG, logger="metalsurfer.placement.site_coords"):
+        r_surface = _get_site_surface_radii(
+            slab, None, top_indices=list(range(len(slab)))
+        )
     assert r_surface == pytest.approx(_SURFACE_COVALENT_RADIUS_FALLBACK)
     assert "No positive covalent radii" in caplog.text
 

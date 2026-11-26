@@ -618,10 +618,9 @@ def inject_atop_sites(
             nbr_pos = mic_support_positions(
                 atom_pos, positions, nbrs, cell=cell, pbc=pbc
             )
-            lift = unit_lift_from_centroid(atom_pos, nbr_pos)
-            if lift is None:
+            n_hat = unit_lift_from_centroid(atom_pos, nbr_pos)
+            if n_hat is None:
                 continue
-            n_hat = lift
             probe = atom_pos + atop_height * n_hat
             anchor = atom_pos
             if np.any(pbc):

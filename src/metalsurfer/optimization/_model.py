@@ -17,7 +17,7 @@ from .._numeric_defaults import (
     DEFAULT_TASK_NAME,
 )
 from ..config import D3BJParameters, require_d3_preset, validate_uma_setup
-from ..exceptions import DependencyMissingError
+from ..exceptions import DependencyMissingError, OptimizationError
 from . import _deps
 from ._validation import (
     _device_key,
@@ -40,7 +40,7 @@ def _unpack_static_energy_forces(
     forces_t = res.get("forces")
     if energy_t is None:
         if require_energy:
-            raise RuntimeError(
+            raise OptimizationError(
                 "ML model returned no energy (out['potential_energy'] is None). "
                 "Check GPU memory and model output."
             )
@@ -48,7 +48,7 @@ def _unpack_static_energy_forces(
     else:
         energy = float(energy_t.detach().cpu().numpy().squeeze())
         if require_finite_energy and not np.isfinite(energy):
-            raise RuntimeError(
+            raise OptimizationError(
                 f"ML model returned non-finite energy: {energy}. "
                 "Check GPU stability and model output."
             )
@@ -116,8 +116,10 @@ def _raise_fairchem_load_error(exc: Exception, model_name: str) -> NoReturn:
         and ("weights_only" in error_msg or "weights only" in error_msg)
         and "slice" in error_msg
     ):
-        raise RuntimeError(_fairchem_pytorch26_unpickling_message()) from exc
-    raise RuntimeError(_fairchem_load_failure_message(error_msg, model_name)) from exc
+        raise OptimizationError(_fairchem_pytorch26_unpickling_message()) from exc
+    raise OptimizationError(
+        _fairchem_load_failure_message(error_msg, model_name)
+    ) from exc
 
 
 def _premove_fairchem_predictor_to_device(model: Any, dev: Any) -> None:
@@ -429,7 +431,7 @@ class TorchSimCalculator:
                 )
         energy = self.results.get("energy")
         if energy is None or not np.isfinite(energy):
-            raise RuntimeError(
+            raise OptimizationError(
                 f"Calculator has no valid energy (got {energy}). "
                 "The model may have failed to produce energy for this system."
             )
@@ -452,7 +454,7 @@ class TorchSimCalculator:
         forces = self.results.get("forces")
         if forces is None:
             n = len(atoms) if atoms is not None else 0
-            raise RuntimeError(
+            raise OptimizationError(
                 f"Calculator has no forces (expected shape ({n}, 3)). "
                 "The model may have failed to produce forces for this system."
             )
@@ -476,7 +478,7 @@ class TorchSimCalculator:
                 )
         stress = self.results.get("stress")
         if stress is None:
-            raise RuntimeError(
+            raise OptimizationError(
                 "Calculator has no stress. "
                 "The model may have failed to produce stress for this system."
             )

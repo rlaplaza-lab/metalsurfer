@@ -29,7 +29,7 @@ from ._logging import warn_once
 from ._numeric_defaults import BINDING_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM
 from ._utils import cell_has_volume
 from .config import AdsorptionConfig
-from .exceptions import DependencyMissingError
+from .exceptions import DependencyMissingError, GeometryValidationError
 from .models import ScreeningResult
 from .placement._constants import _OCCUPANCY_SIGMA_SHELL_SCALE
 from .placement._material import material_aware_pbc
@@ -58,7 +58,7 @@ def _pbc_for_cell(material_type: str, cell: np.ndarray) -> list[bool]:
     """Material-aware PBC; raise if a periodic material has a degenerate cell."""
     pbc = material_aware_pbc(material_type)
     if not cell_has_volume(cell) and any(pbc):
-        raise ValueError(
+        raise GeometryValidationError(
             f"cell is degenerate while material_type={material_type!r} "
             "expects periodic boundaries"
         )
@@ -156,7 +156,20 @@ def _bond_counts_from_dist(
     return bonds
 
 
-_UNPARSED_REFERENCE = object()
+class _UnparsedReference:
+    pass
+
+
+_UNPARSED_REFERENCE = _UnparsedReference()
+
+
+def _require_rdkit_chem() -> None:
+    if Chem is None:
+        raise DependencyMissingError(
+            "rdkit",
+            "check_decomposition",
+            "pip install rdkit",
+        )
 
 
 def _mol_from_smiles(smiles: str):
@@ -490,12 +503,7 @@ def check_decomposition(
     if reference_smiles is None:
         return True, "connectivity intact (no SMILES reference for deeper checks)"
 
-    if Chem is None:
-        raise DependencyMissingError(
-            "rdkit",
-            "check_decomposition",
-            "pip install rdkit",
-        )
+    _require_rdkit_chem()
 
     ref_mol = (
         _mol_from_smiles(reference_smiles)
@@ -905,14 +913,9 @@ def filter_results(
 
     if not config.skip_topology_check:
         prefix = len(slab)
-        ref_mol: object | None = None
+        ref_mol = None
         if reference_smiles:
-            if Chem is None:
-                raise DependencyMissingError(
-                    "rdkit",
-                    "check_decomposition",
-                    "pip install rdkit",
-                )
+            _require_rdkit_chem()
             ref_mol = _mol_from_smiles(reference_smiles)
             ref_formula = _formula_from_mol(ref_mol) if ref_mol is not None else None
         else:

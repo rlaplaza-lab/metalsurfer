@@ -558,9 +558,9 @@ def generate_rolling_probe_sites(
     if not candidates:
         return empty
 
-    verts, _nn, _clears, _, normals = candidates_to_arrays(
-        candidates, tree=tree, compute_nn=False
-    )
+    arrays = candidates_to_arrays(candidates, compute_nn=False)
+    assert arrays is not None
+    verts, _nn, _clears, _, normals = arrays
     n_steps = (
         int(_ROLLING_PROBE_POROUS_EXPOSURE_N_STEPS)
         if _is_3d_pbc(pbc)
@@ -603,7 +603,9 @@ def generate_rolling_probe_sites(
     )
     if not clustered:
         return empty
-    verts, nn_dists, clears, atoms, normals = candidates_to_arrays(clustered, tree=tree)
+    arrays = candidates_to_arrays(clustered, tree=tree)
+    assert arrays is not None
+    verts, nn_dists, clears, atoms, normals = arrays
     return AdaptiveGridResult(
         vertices=verts,
         nn_dists=nn_dists,

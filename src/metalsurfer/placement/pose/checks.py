@@ -1,15 +1,11 @@
 """Pose validation and slab distance scratch helpers."""
 
-import logging
-
 import numpy as np
 from ase import Atoms
 
 from ...config import AdsorptionConfig
 from .. import geometry as geom
 from .._material import material_aware_pbc
-
-logger = logging.getLogger(__name__)
 
 
 def _saturation_exclude_count(

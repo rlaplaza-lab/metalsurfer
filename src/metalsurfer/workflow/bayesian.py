@@ -4,7 +4,7 @@ import logging
 import zlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -12,13 +12,12 @@ from ase import Atoms
 from sklearn.preprocessing import StandardScaler
 
 from ..config import (
-    BO_TRANSFER_CAPABLE_SURROGATES,
     AdsorptionConfig,
+    require_transfer_capable_surrogate,
     resolved_bo_eval_budget,
 )
 from ..filters import interadsorbate_clearance
 from ..ml.bayesian import (
-    TransferCapableSurrogateType,
     build_cumulative_refit_surrogate,
     build_spec_features_geometry_aware,
     build_transfer_surrogate,
@@ -33,6 +32,7 @@ from ..models import (
     BOStepMemory,
     BOTransferInfo,
     PlacementDescriptor,
+    PlacementSpec,
     ReferenceEnergies,
     ScreeningResult,
 )
@@ -60,15 +60,6 @@ from .shared import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _require_transfer_surrogate(name: str) -> TransferCapableSurrogateType:
-    if name not in BO_TRANSFER_CAPABLE_SURROGATES:
-        raise ValueError(
-            f"surrogate {name!r} is not transfer-capable "
-            f"({', '.join(BO_TRANSFER_CAPABLE_SURROGATES)})"
-        )
-    return cast(TransferCapableSurrogateType, name)
 
 
 def prepare_bo_pool(
@@ -167,7 +158,7 @@ def _occupancy_sigma_scales(
     *,
     candidate_features: pd.DataFrame,
     valid_spec_indices: Sequence[int],
-    all_specs: Sequence[Any],
+    all_specs: Sequence[PlacementSpec],
     materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]],
     occupied: Atoms,
     material_type: str,
@@ -309,7 +300,7 @@ def _build_round_surrogate(
             y_current,
             transfer_memory.observed_X_rows,
             transfer_memory.observed_y,
-            surrogate=_require_transfer_surrogate(config.bo.surrogate),
+            surrogate=require_transfer_capable_surrogate(config.bo.surrogate),
             n_estimators=config.bo.n_estimators,
             random_state=config.seed,
             n_jobs=config.n_jobs,
@@ -327,7 +318,7 @@ def _build_round_surrogate(
             y_current,
             transfer_memory.observed_X_rows,
             transfer_memory.observed_y,
-            surrogate=_require_transfer_surrogate(config.bo.surrogate),
+            surrogate=require_transfer_capable_surrogate(config.bo.surrogate),
             n_estimators=config.bo.n_estimators,
             random_state=config.seed,
             n_jobs=config.n_jobs,
@@ -606,7 +597,8 @@ def process_molecule_bayesian(
         reference_smiles=reference_smiles,
     )
     if ctx is None:
-        assert early_failure is not None
+        if early_failure is None:
+            raise RuntimeError("BO screening returned no context and no early failure")
         return _bail_outcome(early_failure)
 
     slab = ctx.slab
@@ -939,9 +931,12 @@ def process_molecule_bayesian(
         n_collapsed=len(bo_duplicate_results),
     )
     if not filtered:
-        logger.info("%s", uniqueness)
+        logger.warning("%s", uniqueness)
         _flush_bo_outputs()
-        assert filter_failure is not None
+        if filter_failure is None:
+            raise RuntimeError(
+                "BO filtering emptied results without a FilterFailure summary"
+            )
         return _bail_outcome(filter_failure)
     logger.info(
         "%s, E_ads range [%.4f, %.4f]",

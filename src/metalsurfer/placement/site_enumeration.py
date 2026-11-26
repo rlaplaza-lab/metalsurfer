@@ -29,7 +29,6 @@ from ._material import (
     symmetry_mode_for_material,
     validate_material_type,
 )
-from .geometry import _get_covalent_radius
 from .site_classify import (
     _TOPOLOGY_SOURCE_TO_TYPE,
     _build_site_records,
@@ -904,16 +903,9 @@ def _get_site_surface_radii(
             indices = tuple(int(i) for i in np.nonzero(top_mask)[0])
 
     site_symbols = [symbols[int(i)] for i in indices]
-    if not any(_get_covalent_radius(symbol) is not None for symbol in site_symbols):
-        logger.debug(
-            "No positive covalent radii for site surface symbols %r (indices %r); "
-            "using mean surface (framework) fallback %.3f Å",
-            site_symbols,
-            list(indices),
-            _SURFACE_COVALENT_RADIUS_FALLBACK,
-        )
-        return float(_SURFACE_COVALENT_RADIUS_FALLBACK)
-    return _mean_covalent_radius(site_symbols)
+    return _mean_covalent_radius(
+        site_symbols, fallback=_SURFACE_COVALENT_RADIUS_FALLBACK
+    )
 
 
 def _compute_site_z_base(

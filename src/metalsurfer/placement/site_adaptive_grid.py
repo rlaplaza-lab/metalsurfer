@@ -1044,7 +1044,7 @@ def _parallel_shell_filter(
             positions=positions,
         )
 
-    parts = parallel_map(_one, bounds, n_jobs=n_jobs, min_tasks=2)
+    parts = parallel_map(_one, bounds, n_jobs=n_jobs)
     verts = [p[0] for p in parts if len(p[0])]
     dists = [p[1] for p in parts if len(p[1])]
     if not verts:
@@ -1173,9 +1173,11 @@ def generate_adaptive_grid_sites(
         pbc=pbc,
         target_clearance=target_c,
     )
-    verts, _nn, _clears, _, normals = candidates_to_arrays(
-        candidates, tree=tree, compute_nn=False
-    )
+    if not candidates:
+        return empty
+    arrays = candidates_to_arrays(candidates, compute_nn=False)
+    assert arrays is not None
+    verts, _nn, _clears, _, normals = arrays
     keep = _exposure_mask(
         verts,
         normals,
@@ -1266,7 +1268,11 @@ def generate_adaptive_grid_sites(
             pbc=pbc,
             target_clearance=target_c,
         )
-        cv, _, _, _, cn = candidates_to_arrays(child_cands, tree=tree, compute_nn=False)
+        if not child_cands:
+            break
+        child_arrays = candidates_to_arrays(child_cands, compute_nn=False)
+        assert child_arrays is not None
+        cv, _, _, _, cn = child_arrays
         keep_c = _exposure_mask(
             cv,
             cn,
@@ -1338,7 +1344,9 @@ def generate_adaptive_grid_sites(
     )
     if not clustered:
         return empty
-    verts, nn_dists, clears, atoms, normals = candidates_to_arrays(clustered, tree=tree)
+    arrays = candidates_to_arrays(clustered, tree=tree)
+    assert arrays is not None
+    verts, nn_dists, clears, atoms, normals = arrays
     return AdaptiveGridResult(
         vertices=verts,
         nn_dists=nn_dists,

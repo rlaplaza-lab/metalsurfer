@@ -270,7 +270,7 @@ def _get_inflight_autobatcher(
                         < max_n_atoms
                         <= (cached_max_atoms + allowed_growth)
                     ):
-                        logger.info(
+                        logger.debug(
                             "Reusing saturation autobatcher from max_n_atoms=%d for %d "
                             "(allowed_growth=%d) to skip memory re-estimation",
                             cached_max_atoms,

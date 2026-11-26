@@ -350,30 +350,32 @@ def shell_target_clearance(
 def candidates_to_arrays(
     candidates: list[CandidateSite],
     *,
-    tree: KDTree,
+    tree: KDTree | None = None,
     compute_nn: bool = True,
-) -> tuple[
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    list[tuple[int, ...]],
-    np.ndarray,
-]:
-    """Return verts, centre-to-centre nn, clearances, atoms, normals."""
+) -> (
+    tuple[
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        list[tuple[int, ...]],
+        np.ndarray,
+    ]
+    | None
+):
+    """Return verts, centre-to-centre nn, clearances, atoms, normals.
+
+    Returns ``None`` when *candidates* is empty. *tree* is required only when
+    *compute_nn* is true.
+    """
     if not candidates:
-        empty = np.empty((0, 3), dtype=float)
-        return (
-            empty,
-            np.empty(0, dtype=float),
-            np.empty(0, dtype=float),
-            [],
-            empty,
-        )
+        return None
     verts = np.asarray([c.position for c in candidates], dtype=float)
     clear = np.asarray([c.clearance for c in candidates], dtype=float)
     atoms = [c.support_indices for c in candidates]
     normals = np.asarray([c.normal for c in candidates], dtype=float)
     if compute_nn:
+        if tree is None:
+            raise ValueError("tree is required when compute_nn=True")
         nn = np.asarray(tree.query(cast(Any, verts), k=1)[0], dtype=float).ravel()
     else:
         nn = np.empty(0, dtype=float)

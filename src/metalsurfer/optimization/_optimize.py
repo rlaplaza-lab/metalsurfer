@@ -24,7 +24,7 @@ from .._numeric_defaults import (
     DEFAULT_TASK_NAME,
 )
 from ..config import AdsorptionConfig
-from ..exceptions import DependencyMissingError
+from ..exceptions import DependencyMissingError, OptimizationError
 from ..surface_prep.freeze import frozen_indices_from_constraints
 from . import _deps
 from ._cache import (
@@ -302,7 +302,7 @@ def _run_optimize_with_oom_retry(
         max_atoms_to_try=resolved_max_atoms_to_try,
     )
     if ab is None:
-        raise RuntimeError("Could not create autobatcher after OOM") from retry_exc
+        raise OptimizationError("Could not create autobatcher after OOM") from retry_exc
     return run_optimize(ab, build_systems())
 
 
@@ -420,7 +420,7 @@ def estimate_parallel_relaxation_capacity(
         padding = config.autobatcher_max_memory_padding
 
         if first_metric <= 0 or not np.isfinite(first_metric):
-            raise RuntimeError(
+            raise OptimizationError(
                 f"Invalid memory scaler metric from probe: {first_metric!r}"
             )
 
@@ -511,7 +511,7 @@ def batch_static(
     with torchsim_output_capture():
         result_list = ts.static(system=atoms_list, model=ts_model)
     if len(result_list) != len(atoms_list):
-        raise RuntimeError(
+        raise OptimizationError(
             "ML model returned mismatched batch size in ts.static: "
             f"expected {len(atoms_list)}, got {len(result_list)}."
         )
@@ -553,7 +553,7 @@ def _split_forces_by_system(
     system_idx = getattr(batch, "system_idx", None)
     if system_idx is None:
         if n_systems > 1:
-            raise RuntimeError(
+            raise OptimizationError(
                 "Batched forces cannot be split per system: the returned batch has "
                 f"{n_systems} systems but no per-atom system_idx, and a contiguous "
                 "split by atom count cannot be verified."
@@ -562,13 +562,13 @@ def _split_forces_by_system(
     else:
         idx_np = np.asarray(system_idx.detach().cpu().numpy()).reshape(-1)
         if forces_np.shape[0] != idx_np.shape[0]:
-            raise RuntimeError(
+            raise OptimizationError(
                 "Batched forces do not align with the per-atom system index: "
                 f"forces shape {forces_np.shape}, system_idx length {idx_np.shape[0]}."
             )
         idx_int = idx_np.astype(np.intp, copy=False)
         if idx_int.size and (int(idx_int.min()) < 0 or int(idx_int.max()) >= n_systems):
-            raise RuntimeError(
+            raise OptimizationError(
                 "Batched forces system_idx out of range: "
                 f"expected ids in [0, {n_systems}), got "
                 f"[{int(idx_int.min())}, {int(idx_int.max())}]."
@@ -579,7 +579,7 @@ def _split_forces_by_system(
 
     for k, (got, expected) in enumerate(zip(per_system, atom_counts, strict=True)):
         if got.shape != (expected, 3):
-            raise RuntimeError(
+            raise OptimizationError(
                 "Batched forces could not be split per system: system "
                 f"{k} has {got.shape[0]} force rows but {expected} atoms."
             )
@@ -763,7 +763,7 @@ def optimize_isolated_molecules_batched(  # pragma: no cover - requires MLIP sta
         atoms_list = state.to_atoms()
         energies = state.energy
         if len(atoms_list) != len(energies):
-            raise RuntimeError(
+            raise OptimizationError(
                 "TorchSim optimize returned mismatched lengths for atoms/energies: "
                 f"{len(atoms_list)} vs {len(energies)}."
             )
@@ -889,7 +889,7 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
         cache_key = setup.cache_key
         if use_autobatcher:
             if ab is None:
-                raise RuntimeError("Could not create autobatcher")
+                raise OptimizationError("Could not create autobatcher")
             if _deps.OPTIM_REGISTRY is None:
                 raise DependencyMissingError(
                     "torch-sim-atomistic",
@@ -970,7 +970,7 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
         if n_returned != n_input:
             # Autobatcher output is ordered positionally; a count mismatch cannot
             # be realigned without per-system ids.
-            raise RuntimeError(
+            raise OptimizationError(
                 "Autobatcher returned mismatched batch size: "
                 f"expected {n_input}, got {n_returned}. Results are mapped to "
                 "inputs positionally and cannot be realigned."

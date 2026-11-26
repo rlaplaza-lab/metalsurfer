@@ -24,7 +24,7 @@ try:
     Chem = _rdkit_chem
     AllChem = _rdkit_allchem
 except (ImportError, AttributeError):
-    pass
+    logger.debug("RDKit optional import unavailable", exc_info=True)
 
 
 def create_conformers_from_smiles(

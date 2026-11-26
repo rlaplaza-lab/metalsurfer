@@ -23,7 +23,7 @@ from ..._numeric_defaults import (
     DEFAULT_N_JOBS,
     DEFAULT_SEED,
 )
-from ...config import BO_TRANSFER_CAPABLE_SURROGATES
+from ...config import require_transfer_capable_surrogate
 from ...placement._constants import _DISTANCE_ZERO_EPS
 from .surrogate import (
     _RESIDUAL_OOF_MAX_FOLDS,
@@ -525,7 +525,6 @@ def _run_transfer_round(
     build_transfer_weights: _TransferWeightBuilder,
     zero_share_when_disabled: bool = False,
     warn_on_column_mismatch: bool = True,
-    function_name: str,
 ) -> TransferSurrogateResult:
     """Validate, align, weight, gate, and finalize one transfer round.
 
@@ -533,11 +532,7 @@ def _run_transfer_round(
     weight_share)``; ``None`` means the prior is unusable and the baseline is
     returned unchanged.
     """
-    if surrogate not in BO_TRANSFER_CAPABLE_SURROGATES:
-        raise ValueError(
-            f"{function_name} requires a transfer-capable surrogate "
-            f"(one of {BO_TRANSFER_CAPABLE_SURROGATES}); got {surrogate!r}"
-        )
+    require_transfer_capable_surrogate(surrogate)
     y_current_arr = np.asarray(y_current, dtype=float)
     # Full-data baseline is only needed for early exits, small-n gating, gate
     # exceptions, or when transfer is rejected. Skip the eager fit when the
@@ -695,7 +690,6 @@ def build_transfer_surrogate(
         trust_patience=trust_patience,
         n_jobs=n_jobs,
         build_transfer_weights=weight_builder,
-        function_name="build_transfer_surrogate",
     )
 
 
@@ -742,7 +736,6 @@ def build_cumulative_refit_surrogate(
         build_transfer_weights=weight_builder,
         zero_share_when_disabled=True,
         warn_on_column_mismatch=False,
-        function_name="build_cumulative_refit_surrogate",
     )
     if result.transfer_disabled:
         logger.warning(

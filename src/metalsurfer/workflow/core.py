@@ -143,7 +143,10 @@ def process_molecule(
             reference_smiles=reference_smiles,
         )
         if ctx is None:
-            assert early_failure is not None
+            if early_failure is None:
+                raise RuntimeError(
+                    "molecule screening returned no context and no early failure"
+                )
             return _outcome([], early_failure)
 
         slab = ctx.slab

@@ -31,6 +31,7 @@ from ..models import (
     BOStepMemory,
     BOTransferInfo,
     PlacementDescriptor,
+    PlacementSpec,
     ReferenceEnergies,
     ScreeningResult,
 )
@@ -385,7 +386,8 @@ def _materialize_spec_placements(
     )
     for spec, (result, fail_reason) in zip(specs, generated, strict=True):
         if result is None:
-            assert fail_reason is not None
+            if fail_reason is None:
+                fail_reason = "unknown_generation_failure"
             failures.append(
                 PlacementFailureEvent(
                     placement_id=spec.placement_index,
@@ -553,7 +555,10 @@ def _evaluate_optimized_candidate(
         )
 
     slab_size = len(slab_atoms)
-    assert min_d is not None
+    if min_d is None:
+        raise RuntimeError(
+            "validation invariant: min_d missing after ok adsorption check"
+        )
     dist = float(min_d)
     result_atoms = _copy_with_material_pbc(opt_atoms, material_type)
     result = ScreeningResult(
@@ -629,7 +634,10 @@ def _optimize_and_evaluate_placements(
                 surface_prefix_atoms=surface_prefix_atoms,
             )
         if result is None:
-            assert failure_event is not None
+            if failure_event is None:
+                raise RuntimeError(
+                    f"evaluation returned no result or failure for placement_id={pid}"
+                )
             validation_failure_events.append(failure_event)
             continue
         results.append(result)
@@ -711,7 +719,7 @@ def _finalize_screen_results(
 class _PreparedBOPool:
     """Shared BO candidate pool after enumeration and geometry-aware features."""
 
-    all_specs: list[Any]
+    all_specs: list[PlacementSpec]
     candidate_features: pd.DataFrame
     valid_spec_indices: list[int]
     scaled_candidate_features: np.ndarray
@@ -1224,18 +1232,22 @@ class MoleculeScreeningContext:
     conformer_energies: list[float] | None = None
 
 
+_MISSING_REFERENCE_MSG = "missing reference energy for %s"
+
+
 def _missing_molecule_reference(
     molecule_name: str,
     config: AdsorptionConfig,
 ) -> ReferenceFailure:
     """Return a soft reference failure, or raise when configured to fail hard."""
-    logger.error("Missing reference energy for %s", molecule_name)
     if config.fail_on_missing_reference:
+        logger.error(_MISSING_REFERENCE_MSG, molecule_name)
         raise ValueError(
-            f"No reference energy for {molecule_name}; cannot continue with "
+            f"{_MISSING_REFERENCE_MSG % molecule_name}; cannot continue with "
             "fail_on_missing_reference=True"
         )
-    return ReferenceFailure(reason=f"missing reference energy for {molecule_name}")
+    logger.warning(_MISSING_REFERENCE_MSG, molecule_name)
+    return ReferenceFailure(reason=_MISSING_REFERENCE_MSG % molecule_name)
 
 
 def _prepare_molecule_screening(
@@ -1291,7 +1303,7 @@ def _prepare_molecule_screening(
             )
             t_conformers = time.perf_counter() - t0
             if conformer_pack is None:
-                logger.error("Could not generate conformers for %s", molecule_name)
+                logger.warning("Could not generate conformers for %s", molecule_name)
                 return (
                     None,
                     ConformerFailure(
@@ -1578,7 +1590,7 @@ def _select_molecules_for_processing(
                     existing_molecules = set(existing_df[column].values)
                     break
         except FileNotFoundError:
-            pass
+            logger.debug("No existing summary at %s", summary)
         except (
             OSError,
             UnicodeDecodeError,

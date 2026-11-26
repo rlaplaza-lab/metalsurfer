@@ -66,6 +66,26 @@ from .shared import (
 logger = logging.getLogger(__name__)
 
 
+def _record_saturation_failure(
+    failure_summary_out: dict[str, FailureSummary] | None,
+    key: str,
+    failure: FailureSummary | None,
+) -> None:
+    if failure_summary_out is not None and failure:
+        failure_summary_out[key] = failure
+
+
+def _require_bo_transfer_info(
+    transfer_info: BOTransferInfo | None,
+    molecule_name: str,
+) -> BOTransferInfo:
+    if transfer_info is None:
+        raise RuntimeError(
+            f"Bayesian screening for {molecule_name!r} returned no transfer_info"
+        )
+    return transfer_info
+
+
 def _omega(
     result: ScreeningResult,
     activity_by_molecule: Mapping[str, float],
@@ -373,7 +393,10 @@ def _commit_joint_step(
         temperature=temperature,
         pressure=pressure,
     )
-    assert best is not None
+    if best is None:
+        raise RuntimeError(
+            "commit_best_joint_config returned no best config for non-empty valid_configs"
+        )
     return best, committed, ranked_group
 
 
@@ -693,18 +716,15 @@ def _screen_saturation_molecule(
         **kwargs,
     )
     if bo_enabled:
-        if outcome.transfer_info is None:
-            raise RuntimeError(
-                f"Bayesian screening for {molecule_name!r} returned no transfer_info"
-            )
-        transfer_info = outcome.transfer_info
+        transfer_info = _require_bo_transfer_info(outcome.transfer_info, molecule_name)
         new_memory = outcome.bo_memory
     else:
         transfer_info = None
         new_memory = None
 
-    if failure_summary_out is not None and outcome.failure_summary:
-        failure_summary_out[molecule_name] = outcome.failure_summary
+    _record_saturation_failure(
+        failure_summary_out, molecule_name, outcome.failure_summary
+    )
 
     filtered = _filter_saturation_topology_results(
         list(outcome.results),
@@ -933,11 +953,12 @@ def _run_single_molecule_saturation(
         config=config,
     )
     if pack is None:
-        logger.error("Could not generate conformers for %s", molecule)
-        if failure_summary_out is not None:
-            failure_summary_out[molecule] = ConformerFailure(
-                reason=f"could not generate conformers for {molecule}"
-            )
+        logger.warning("Could not generate conformers for %s", molecule)
+        _record_saturation_failure(
+            failure_summary_out,
+            molecule,
+            ConformerFailure(reason=f"could not generate conformers for {molecule}"),
+        )
         return None
     cached_conformers, cached_conformer_energies = pack
 
@@ -1003,12 +1024,10 @@ def _run_single_molecule_saturation(
                     topology_check=topology_check,
                     activity_by_molecule=activity_by_molecule,
                 )
-                transfer_info = joint_out.transfer_info
+                transfer_info = _require_bo_transfer_info(
+                    joint_out.transfer_info, molecule
+                )
                 _commit_bo_memory_state(bo_state, joint_out.bo_memory, config=config)
-                if transfer_info is None:
-                    raise RuntimeError(
-                        f"Bayesian screening for {molecule!r} returned no transfer_info"
-                    )
             else:
                 joint_out = screen_joint_tuplet_homogeneous(
                     smiles=smiles,
@@ -1028,8 +1047,9 @@ def _run_single_molecule_saturation(
                     debug_sites_step=step,
                     log_prefix=f"Saturation for {molecule} | step {step} | ",
                 )
-            if failure_summary_out is not None and joint_out.failure_summary:
-                failure_summary_out[molecule] = joint_out.failure_summary
+            _record_saturation_failure(
+                failure_summary_out, molecule, joint_out.failure_summary
+            )
             committed_pair = _commit_joint_step(
                 joint_out,
                 activity_by_molecule=activity_by_molecule,
@@ -1196,10 +1216,11 @@ def _run_multi_molecule_saturation(
                 "Multi-mol saturation: could not generate conformers for %s; skipping this molecule",
                 mol,
             )
-            if failure_summary_out is not None:
-                failure_summary_out[mol] = ConformerFailure(
-                    reason=f"could not generate conformers for {mol}"
-                )
+            _record_saturation_failure(
+                failure_summary_out,
+                mol,
+                ConformerFailure(reason=f"could not generate conformers for {mol}"),
+            )
             continue
         conformer_cache[mol] = pack
 
@@ -1328,9 +1349,10 @@ def _run_multi_molecule_saturation(
                 ),
                 log_prefix=f"Multi-mol saturation | step {step} | ",
             )
-            if failure_summary_out is not None and joint_out.failure_summary:
-                for mol in active_molecules:
-                    failure_summary_out[mol] = joint_out.failure_summary
+            for mol in active_molecules:
+                _record_saturation_failure(
+                    failure_summary_out, mol, joint_out.failure_summary
+                )
             for row in joint_out.flat_results:
                 per_molecule_results[row.molecule].append(row)
             slots = joint_out.slots_by_molecule or {}
@@ -1672,8 +1694,7 @@ def run_saturation_screening(
             E_mol = ref.get_molecule_energy(mol)
             if E_mol is None:
                 failure = _missing_molecule_reference(mol, config)
-                if failure_summary_out is not None:
-                    failure_summary_out[mol] = failure
+                _record_saturation_failure(failure_summary_out, mol, failure)
                 continue
 
             run_result = _run_single_molecule_saturation(

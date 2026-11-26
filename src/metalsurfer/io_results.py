@@ -485,7 +485,7 @@ def _write_saturation_csv_bundle(
 ) -> None:
     """Write the saturation CSV bundle, preserving molecules from earlier runs.
 
-    ``saturation_summary.csv`` is what ``skip_saturation_file`` reads back, so a
+    ``SATURATION_SUMMARY_CSV`` is what ``skip_saturation_file`` reads back, so a
     truncating write here would delete the very rows that drive incremental
     reruns.
     """
@@ -804,7 +804,7 @@ def save_saturation_results(
     are persisted. Unrecognized types are skipped with a warning.
 
     If ``config.saturation_save_all_placements`` is true (default), also writes
-    ``saturation_placements_detailed.csv`` and, for each step, every structure in
+    ``SATURATION_PLACEMENTS_DETAILED_CSV`` and, for each step, every structure in
     ``all_results`` under ``step_{NNN}_placements/`` (mirroring screening
     ``conformer_*`` layout). The per-step best-slab files are always written.
 
@@ -911,7 +911,7 @@ def save_multi_mol_saturation_results(
     ``winning_molecule`` / ``per_molecule_budgets`` columns to the detail CSV.
 
     When ``config.saturation_save_all_placements`` is true, writes
-    ``saturation_placements_detailed.csv`` and per-step placement trees under
+    ``SATURATION_PLACEMENTS_DETAILED_CSV`` and per-step placement trees under
     ``step_{NNN}_placements/{molecule}/`` for each molecule's result list.
 
     Parameters

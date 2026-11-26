@@ -753,7 +753,10 @@ def process_joint_tuplet_bayesian(
         debug_sites_step=debug_sites_step,
     )
     if ctx is None:
-        assert early_failure is not None
+        if early_failure is None:
+            raise RuntimeError(
+                "joint tuplet screening returned no context and no early failure"
+            )
         return JointTupletScreenOutcome(
             [],
             [],

@@ -52,7 +52,7 @@ def parallel_map[T, R](
     items: Sequence[T],
     *,
     n_jobs: int = DEFAULT_N_JOBS,
-    min_tasks: int,
+    min_tasks: int = 2,
     n_tasks: int | None = None,
 ) -> list[R]:
     """Map *fn* in order. Serial when workers are 1 or *n_tasks* < *min_tasks*.

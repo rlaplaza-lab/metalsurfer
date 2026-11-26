@@ -899,7 +899,7 @@ def _validate_relaxed_composite(
         slab_size=len(base_slab),
     )
     if not ok:
-        logger.debug("%scomposite frozen substrate drift: %s", log_prefix, reason)
+        logger.warning("%scomposite frozen substrate drift: %s", log_prefix, reason)
         return [], f"frozen_drift: {reason}"
 
     ok, reason = _validate_geometry(

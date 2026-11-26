@@ -12,7 +12,10 @@ Consumers access the symbols through the module object (``_deps.ts``,
 This module must not import any other ``metalsurfer.optimization`` submodule.
 """
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 try:
     import torch as _torch_mod
@@ -58,4 +61,4 @@ try:  # pragma: no cover - requires the optional MLIP stack
     determine_max_batch_size = _determine_max_batch_size
     calculate_memory_scalers = _calculate_memory_scalers
 except ImportError:
-    pass
+    logger.debug("torch-sim optional import unavailable", exc_info=True)
