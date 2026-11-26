@@ -298,8 +298,11 @@ Pipeline:
    use ridge enrichment; the flag matters for porous frameworks,
    rough/non-planar slabs, and explicit Voronoi.
 7. Typing: distance ratios on six nearest neighbours, or top-layer mesh
-   classify (``delaunay`` / ``auto`` on slabs) that labels candidates as
-   atop / bridge / hollow. Hollows may carry ``hollow_order`` (3- or 4-fold).
+   classify (``delaunay`` / ``auto`` on slabs). Labels are ``atop``,
+   ``bridge``, ``hollow`` (hollows may carry ``hollow_order``, 3- or
+   4-fold), and ``pore`` when the nearest framework atom is farther than
+   the pore threshold. ``pore`` is a void label; wall sites stay
+   atop / bridge / hollow.
 8. ``Site`` records: ``xyz``, local ``normal``, ``kind`` (``wall`` /
    ``void``), ``site_type``, ``slab_indices``, ``env_fingerprint``,
    ``site_source``, ``material_type``. Placement switches on ``kind``;

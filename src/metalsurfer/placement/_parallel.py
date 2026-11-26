@@ -5,14 +5,10 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from typing import TypeVar
 
 from .._numeric_defaults import DEFAULT_N_JOBS
 
 __all__ = ["DEFAULT_N_JOBS", "parallel_map", "resolve_materialize_workers"]
-
-_T = TypeVar("_T")
-_R = TypeVar("_R")
 
 
 def resolve_materialize_workers(
@@ -51,14 +47,14 @@ def resolve_materialize_workers(
     return workers
 
 
-def parallel_map(
-    fn: Callable[[_T], _R],
-    items: Sequence[_T],
+def parallel_map[T, R](
+    fn: Callable[[T], R],
+    items: Sequence[T],
     *,
     n_jobs: int = DEFAULT_N_JOBS,
     min_tasks: int,
     n_tasks: int | None = None,
-) -> list[_R]:
+) -> list[R]:
     """Map *fn* in order. Serial when workers are 1 or *n_tasks* < *min_tasks*.
 
     *n_tasks* defaults to ``len(items)`` so chunked work can keep the original

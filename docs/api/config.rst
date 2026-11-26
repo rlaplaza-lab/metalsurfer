@@ -146,8 +146,9 @@ Site detection
    **Type:** ``float | None`` · **Default:** ``None`` (Å)
 
    Minimum distance from a framework atom to an accepted Voronoi site. When
-   ``None``, derived from covalent radii at runtime. Increase to exclude sites too
-   close to pore walls in tight frameworks.
+   ``None``, derived from covalent radii at runtime. When set, must be finite
+   and positive. Increase to exclude sites too close to pore walls in tight
+   frameworks.
 
 ``voronoi_max_site_distance``
    **Type:** ``float | None`` · **Default:** ``None`` (Å)
@@ -427,8 +428,9 @@ Initial placement validation
 ``max_initial_distance``
    **Type:** ``float | None`` · **Default:** ``None`` (Å)
 
-   Optional upper bound on initial adsorbate–surface distance. When set, rejects
-   placements starting too far from the surface.
+   Optional upper bound on initial adsorbate–surface distance. When set, must
+   be finite and positive, and rejects placements starting too far from the
+   surface.
 
 ``strict_initial_placement``
    **Type:** ``bool`` · **Default:** ``False``
@@ -570,9 +572,10 @@ Relaxation and MLIP
 ``autobatcher_max_memory_scaler``
    **Type:** ``float | None`` · **Default:** ``None``
 
-   Optional override for TorchSim memory scaler. When set, TorchSim skips GPU
-   memory estimation and autotuned ``num_placements`` / BO batch sizes are
-   derived from it. When ``None``, workload autotune writes the probed scaler
+   Optional override for TorchSim memory scaler. When set, must be finite and
+   positive; TorchSim skips GPU memory estimation and autotuned
+   ``num_placements`` / BO batch sizes are derived from it. When ``None``,
+   workload autotune writes the probed scaler
    onto the resolved config so later BO batches and saturation steps reuse it
    instead of re-estimating.
 
@@ -741,7 +744,8 @@ Used by :func:`~metalsurfer.run_adsorption_bo` and
    **Type:** ``float`` · **Default:** ``1.96``
 
    Exploration parameter for **LCB** acquisition only (``bo.acquisition="lcb"``).
-   Ignored for ``"ei"`` and for the default ``"pi"``.
+   Must be finite and non-negative. Ignored for ``"ei"`` and for the default
+   ``"pi"``.
 
 ``bo.acquisition``
    **Type:** ``Literal["lcb", "ei", "pi"]`` · **Default:** ``"pi"``
@@ -813,6 +817,9 @@ Used by :func:`~metalsurfer.run_adsorption_bo` and
    **Type:** ``float`` · **Default:** ``0.35``
 
    Maximum total weight contributed by transferred prior-step observations.
+   Campaigns pass this value into both weighted transfer and cumulative refit.
+   ``build_cumulative_refit_surrogate`` without this argument uses
+   ``BO_CUMULATIVE_REFIT_WEIGHT_CAP_DEFAULT`` (``0.5``).
 
 ``bo.transfer.similarity_lengthscale``
    **Type:** ``float`` · **Default:** ``4.0``
@@ -855,7 +862,9 @@ Used by :func:`~metalsurfer.run_adsorption_bo` and
 ``bo.transfer.proximity_floor``
    **Type:** ``float`` · **Default:** ``0.0``
 
-   Minimum sample weight for prior rows after proximity decay.
+   Minimum sample weight for prior rows after proximity decay. Campaigns pass
+   this value (default ``0.0``). ``build_cumulative_refit_surrogate`` without
+   it uses ``BO_CUMULATIVE_REFIT_PROXIMITY_FLOOR_DEFAULT`` (``0.05``).
 
 ``bo.transfer.prior_step_window``
    **Type:** ``int | None`` · **Default:** ``2``
