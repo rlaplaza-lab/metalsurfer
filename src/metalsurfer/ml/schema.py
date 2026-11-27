@@ -23,6 +23,7 @@ from .._csv_coerce import (
 from .._csv_coerce import (
     require_key as _require_row_key,
 )
+from .._messages import missing_required_column
 from .._numeric_defaults import (
     CONTACT_COVALENT_SCALE_DEFAULT,
     DEFAULT_DEVICE,
@@ -93,10 +94,10 @@ def _context_cell(row: dict[str, Any], spec: _ContextField) -> Any:
     key = f"ctx_{spec.name}"
     if spec.name == "dispersion":
         if key not in row:
-            raise ValueError(f"missing required column {key!r}")
+            raise ValueError(missing_required_column(key))
         value = row[key]
         if value is None or str(value).strip() == "":
-            raise ValueError(f"missing required column {key!r}")
+            raise ValueError(missing_required_column(key))
         return value
     return _require_row_value(row, key)
 
@@ -497,9 +498,7 @@ class PlacementRecord:
             smiles=smiles,
             surface_id=surface_id,
             placement_id=result.placement_id,
-            descriptor=_normalized_descriptor(
-                result.placement_descriptor, placement_index=result.placement_id
-            ),
+            descriptor=result.placement_descriptor,
             energy_adsorption=result.energy_adsorption,
             energy_adslab=result.energy_adslab,
             energy_slab=result.energy_slab,
@@ -599,7 +598,7 @@ class PlacementRecord:
             context=_context_for_record(config, material_type=material_type),
         )
 
-    def record_hash(self) -> str:
+    def record_hash(self, *, context_hash: str | None = None) -> str:
         """Deterministic hash uniquely identifying this placement + method combination.
 
         Combines placement geometry, identity, and computation settings.
@@ -653,7 +652,9 @@ class PlacementRecord:
                 if d.fragment_positions is not None
                 else None
             ),
-            "context_hash": self.context.settings_hash(),
+            "context_hash": context_hash
+            if context_hash is not None
+            else self.context.settings_hash(),
         }
         blob = json.dumps(key_dict, sort_keys=True).encode()
         return hashlib.sha256(blob).hexdigest()[:16]
@@ -670,8 +671,9 @@ class PlacementRecord:
         include_provenance
             If True, include full provenance and context fields.
         """
+        context_hash = self.context.settings_hash()
         row: dict[str, Any] = {
-            "record_hash": self.record_hash(),
+            "record_hash": self.record_hash(context_hash=context_hash),
             "molecule": self.molecule,
             "smiles": self.smiles,
             "surface_id": self.surface_id,
@@ -688,7 +690,7 @@ class PlacementRecord:
             "is_penalty_label": self.is_penalty_label,
             "label_source": self.label_source,
             "schema_version": SCHEMA_VERSION,
-            "context_hash": self.context.settings_hash(),
+            "context_hash": context_hash,
         }
         if include_provenance:
             for key, value in self.context.to_dict().items():

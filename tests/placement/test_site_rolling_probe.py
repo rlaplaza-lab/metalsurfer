@@ -6,7 +6,6 @@ from ase import Atoms
 from scipy.spatial import KDTree
 
 import metalsurfer.placement.site_rolling_probe as rolling_probe_module
-from metalsurfer._geom_pbc import minimum_image_cartesian_delta
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.placement.generators import (
     enumerate_placement_specs,
@@ -14,7 +13,6 @@ from metalsurfer.placement.generators import (
 )
 from metalsurfer.placement.site_context import (
     _SITE_CONTEXT_CACHE,
-    _SITE_CONTEXT_CACHE_LOCK,
     resolve_site_context_for_sampling,
 )
 from metalsurfer.placement.site_enumeration import (
@@ -28,7 +26,7 @@ from metalsurfer.placement.site_rolling_probe import (
     _two_sphere_circle_samples,
 )
 
-from ..conftest import make_nanoparticle, make_porous_framework, make_slab
+from ..conftest import make_nanoparticle, make_porous_framework, make_slab, mic_delta
 from ._helpers import MATERIAL_CASES
 
 
@@ -50,11 +48,7 @@ def test_triplet_gate_uses_chosen_image_separation_not_mic(monkeypatch):
     skin = 0.2
     cutoff = float(radii[1] + radii[2] + 2.0 * skin)
     straight = float(np.linalg.norm(positions[2] - positions[1]))
-    mic = float(
-        np.linalg.norm(
-            minimum_image_cartesian_delta(positions[2] - positions[1], cell, pbc)
-        )
-    )
+    mic = float(np.linalg.norm(mic_delta(positions[2] - positions[1], cell, pbc=pbc)))
     assert straight > cutoff
     assert mic <= cutoff
 
@@ -285,8 +279,7 @@ def test_rolling_probe_site_context_uses_shared_symmetry_path():
         n_jobs=1,
         slab_relaxation_mode="none",
     )
-    with _SITE_CONTEXT_CACHE_LOCK:
-        _SITE_CONTEXT_CACHE.clear()
+    _SITE_CONTEXT_CACHE.clear()
     ctx = resolve_site_context_for_sampling(
         slab, cfg, symmetry_broken=False, material_type="slab"
     )

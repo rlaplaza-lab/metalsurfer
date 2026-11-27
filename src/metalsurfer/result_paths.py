@@ -54,3 +54,31 @@ def saturation_xyz_dir(results_dir: Path | str, label: str) -> Path:
 def saturation_vasp_dir(results_dir: Path | str, label: str) -> Path:
     """Directory for saturation VASP inputs under *label* (molecule or combo)."""
     return Path(results_dir) / "vasp_inputs" / f"{label}_saturation"
+
+
+def conformer_xyz_name(pid: int) -> str:
+    """Leaf filename for a full-slab placement XYZ."""
+    return f"conformer_{pid:03d}.xyz"
+
+
+def conformer_adsorbate_xyz_name(pid: int) -> str:
+    """Leaf filename for an adsorbate-only placement XYZ."""
+    return f"conformer_{pid:03d}_adsorbate.xyz"
+
+
+def conformer_dir_name(pid: int) -> str:
+    """Leaf directory name for one placement's VASP inputs."""
+    return f"conformer_{pid:03d}"
+
+
+def conformer_poscar_relpath(pid: int) -> Path:
+    """Relative ``conformer_{pid:03d}/POSCAR`` under a VASP parent."""
+    return Path(conformer_dir_name(pid)) / "POSCAR"
+
+
+def step_placements_dirname(step: int) -> str:
+    """Directory name for all placements written at one saturation step."""
+    return f"step_{step:03d}_placements"
+
+
+FINAL_SATURATED_SLAB_XYZ = "final_saturated_slab.xyz"

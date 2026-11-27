@@ -3,7 +3,6 @@
 import hashlib
 import logging
 import struct
-import threading
 from dataclasses import dataclass
 
 import numpy as np
@@ -11,7 +10,11 @@ from ase import Atoms
 
 from ..config import AdsorptionConfig
 from ..symmetry import SymmetryAnalysisError
-from ._cache_key import _pack_optional_float
+from ._cache_key import (
+    BoundedFifoCache,
+    _pack_optional_float,
+    pack_atoms_geometry_bytes,
+)
 from ._material import material_aware_pbc, validate_material_type
 from .site_enumeration import (
     _cluster_equivalent_sites,
@@ -51,8 +54,9 @@ class SiteContext:
 # Unique-sites + resolved context use 2 slots per geometry; 64 covers ~32 slabs
 # (e.g. miller/facet sweeps) without thrashing.
 _SITE_CONTEXT_CACHE_MAX_ENTRIES = 64
-_SITE_CONTEXT_CACHE: dict[str, SiteContext] = {}
-_SITE_CONTEXT_CACHE_LOCK = threading.Lock()
+_SITE_CONTEXT_CACHE: BoundedFifoCache[SiteContext] = BoundedFifoCache(
+    _SITE_CONTEXT_CACHE_MAX_ENTRIES
+)
 
 
 def _no_sites_context(
@@ -83,10 +87,7 @@ def _unique_sites_cache_key(
     ``material_type``). Spacing knobs for ``adaptive_grid`` and ``side_policy``
     for wall-near plugins are part of the key when those generators are selected.
     """
-    pos_bytes = slab.get_positions().tobytes()
-    cell_bytes = np.asarray(slab.get_cell()).tobytes()
-    pbc_bytes = np.asarray(slab.get_pbc(), dtype=np.uint8).tobytes()
-    numbers_bytes = np.asarray(slab.get_atomic_numbers(), dtype=np.int32).tobytes()
+    geometry_bytes = pack_atoms_geometry_bytes(slab, include_pbc=True)
     cfg_bytes = (
         _pack_optional_float(config.voronoi_probe_radius)
         + _pack_optional_float(config.voronoi_max_site_distance)
@@ -113,9 +114,7 @@ def _unique_sites_cache_key(
         )
     elif str(config.site_generator) == "rolling_probe":
         scale_bytes = b"\x00rps\x00" + str(config.side_policy).encode() + b"\x00"
-    return hashlib.sha256(
-        pos_bytes + cell_bytes + pbc_bytes + numbers_bytes + cfg_bytes + scale_bytes
-    ).hexdigest()
+    return hashlib.sha256(geometry_bytes + cfg_bytes + scale_bytes).hexdigest()
 
 
 def _sampling_symmetry_broken(
@@ -148,13 +147,7 @@ def _site_context_cache_key(
 
 
 def _store_site_context_cache(cache_key: str, ctx: SiteContext) -> SiteContext:
-    with _SITE_CONTEXT_CACHE_LOCK:
-        if cache_key in _SITE_CONTEXT_CACHE:
-            return _SITE_CONTEXT_CACHE[cache_key]
-        if len(_SITE_CONTEXT_CACHE) >= _SITE_CONTEXT_CACHE_MAX_ENTRIES:
-            _SITE_CONTEXT_CACHE.pop(next(iter(_SITE_CONTEXT_CACHE)))
-        _SITE_CONTEXT_CACHE[cache_key] = ctx
-    return ctx
+    return _SITE_CONTEXT_CACHE.store(cache_key, ctx)
 
 
 def resolve_site_context_for_sampling(
@@ -193,8 +186,7 @@ def resolve_site_context_for_sampling(
         symmetry_broken=symmetry_broken,
     )
 
-    with _SITE_CONTEXT_CACHE_LOCK:
-        cached = _SITE_CONTEXT_CACHE.get(cache_key)
+    cached = _SITE_CONTEXT_CACHE.get(cache_key)
     if cached is not None:
         return cached
 
@@ -389,8 +381,7 @@ def _get_unique_sites_for_specs(
     geometric clustering result (no spglib).
     """
     cache_key = _unique_sites_cache_key(slab, config, material_type=material_type)
-    with _SITE_CONTEXT_CACHE_LOCK:
-        cached = _SITE_CONTEXT_CACHE.get(cache_key)
+    cached = _SITE_CONTEXT_CACHE.get(cache_key)
     if cached is not None:
         return cached
 

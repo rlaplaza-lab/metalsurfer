@@ -2,7 +2,6 @@
 
 import hashlib
 import struct
-import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -14,7 +13,11 @@ from scipy.spatial import KDTree
 from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementPose, PlacementSpec
 from . import geometry as geom
-from ._cache_key import _pack_optional_float
+from ._cache_key import (
+    BoundedFifoCache,
+    _pack_optional_float,
+    pack_atoms_geometry_bytes,
+)
 from ._constants import (
     _ATOP_INJECTION_HEIGHT_FACTOR,
     _DISSOCIATIVE_MAX_ADJACENT_SEP_CAP_ANGSTROM,
@@ -71,8 +74,9 @@ class _DissociativeSitePair:
 
 
 _DISSOCIATIVE_PAIR_CACHE_MAX_ENTRIES = 16
-_DISSOCIATIVE_PAIR_CACHE: dict[str, list[_DissociativeSitePair]] = {}
-_DISSOCIATIVE_PAIR_CACHE_LOCK = threading.Lock()
+_DISSOCIATIVE_PAIR_CACHE: BoundedFifoCache[list[_DissociativeSitePair]] = (
+    BoundedFifoCache(_DISSOCIATIVE_PAIR_CACHE_MAX_ENTRIES)
+)
 
 
 def _is_dissociable_diatomic(adsorbate: Atoms) -> bool:
@@ -121,11 +125,7 @@ def _dissociative_pair_cache_key(
     *,
     material_type: str,
 ) -> str:
-    pos_bytes = slab_for_sites.get_positions().tobytes()
-    cell_bytes = np.asarray(slab_for_sites.get_cell()).tobytes()
-    numbers_bytes = np.asarray(
-        slab_for_sites.get_atomic_numbers(), dtype=np.int32
-    ).tobytes()
+    geometry_bytes = pack_atoms_geometry_bytes(slab_for_sites, include_pbc=False)
     cfg_bytes = (
         struct.pack("<d", float(config.site_equivalence_tolerance))
         + _pack_optional_float(config.voronoi_probe_radius)
@@ -141,9 +141,7 @@ def _dissociative_pair_cache_key(
         + material_type.encode()
         + struct.pack("<d", float(config.min_adsorbate_separation))
     )
-    return hashlib.sha256(
-        pos_bytes + cell_bytes + numbers_bytes + cfg_bytes
-    ).hexdigest()
+    return hashlib.sha256(geometry_bytes + cfg_bytes).hexdigest()
 
 
 def _filter_hollow_pore_sites(sites: Sequence[Site]) -> list[Site]:
@@ -282,8 +280,7 @@ def _get_dissociative_site_pairs(
         f"{base}|sites={sites_tag}|occ={occ_tag}|{foot_tag}".encode()
     ).hexdigest()
 
-    with _DISSOCIATIVE_PAIR_CACHE_LOCK:
-        cached = _DISSOCIATIVE_PAIR_CACHE.get(cache_key)
+    cached = _DISSOCIATIVE_PAIR_CACHE.get(cache_key)
     if cached is not None:
         return list(cached)
 
@@ -297,13 +294,7 @@ def _get_dissociative_site_pairs(
         site_context=site_context,
         pre_resolved_sites=pre_resolved,
     )
-    with _DISSOCIATIVE_PAIR_CACHE_LOCK:
-        if cache_key in _DISSOCIATIVE_PAIR_CACHE:
-            return list(_DISSOCIATIVE_PAIR_CACHE[cache_key])
-        if len(_DISSOCIATIVE_PAIR_CACHE) >= _DISSOCIATIVE_PAIR_CACHE_MAX_ENTRIES:
-            _DISSOCIATIVE_PAIR_CACHE.pop(next(iter(_DISSOCIATIVE_PAIR_CACHE)))
-        _DISSOCIATIVE_PAIR_CACHE[cache_key] = list(pairs)
-    return pairs
+    return list(_DISSOCIATIVE_PAIR_CACHE.store(cache_key, list(pairs)))
 
 
 def _compute_dissociative_site_pairs(

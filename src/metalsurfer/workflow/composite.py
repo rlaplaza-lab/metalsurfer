@@ -863,9 +863,10 @@ def _rewrite_relaxed_composite(
     e_mol_sum = float(sum(w.energy_adsorbate for w in winners))
     e_ads_total = e_adslab - E_slab - e_mol_sum
     e_ads_per_mol = e_ads_total / len(winners)
+    # All winner rows share the same relaxed composite geometry.
+    atoms_out = _copy_with_material_pbc(opt_atoms, material_type)
     rewritten: list[ScreeningResult] = []
     for k, winner in enumerate(winners):
-        atoms_out = _copy_with_material_pbc(opt_atoms, material_type)
         rewritten.append(
             replace(
                 winner,

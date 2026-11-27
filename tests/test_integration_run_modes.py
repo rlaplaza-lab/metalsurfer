@@ -53,6 +53,7 @@ from metalsurfer.workflow.shared import (
 
 from .conftest import (
     E_ADS_IDENTITY_TOL,
+    assert_energy_identity,
     assert_no_intramolecular_clashes,
     assert_paths_exist,
     assert_water_oh_hh_geometry,
@@ -302,16 +303,6 @@ def _assert_dissociative_h2_geometry(ads: Atoms, slab: Atoms) -> None:
     )
 
 
-def _assert_energy_identity(result, expected_n: int) -> None:
-    """Residual equals ``expected_n`` times the stored per-molecule E_ads."""
-    assert expected_n >= 1
-    residual = result.energy_adslab - result.energy_slab - result.energy_adsorbate
-    assert residual == pytest.approx(
-        result.energy_adsorption * expected_n,
-        abs=E_ADS_IDENTITY_TOL,
-    )
-
-
 def _assert_survivor_physics(
     result,
     *,
@@ -323,7 +314,8 @@ def _assert_survivor_physics(
 ) -> None:
     """Critical physics gates for campaign survivors (stubbed or real MLIP)."""
     assert np.isfinite(result.energy_adsorption)
-    _assert_energy_identity(result, expected_n)
+    assert expected_n >= 1
+    assert_energy_identity(result, expected_n=expected_n)
     d_lo, d_hi = _distance_window(material_type)
     assert d_lo <= result.distance <= d_hi, (
         f"Survivor must remain adsorbed ({d_lo}–{d_hi} Å), got {result.distance:.2f}"
@@ -623,7 +615,7 @@ def test_run_saturation_substrate_matrix(workdir, monkeypatch, material_type):
     for step in run.steps:
         r = step.best_result
         assert np.isfinite(r.energy_adsorption)
-        _assert_energy_identity(r, expected_n=1)
+        assert_energy_identity(r, expected_n=1)
         assert d_lo <= r.distance <= d_hi
         ads = r.atoms[r.slab_size :]
         assert sorted(ads.get_chemical_symbols()) == ["H", "H", "O"]

@@ -17,6 +17,17 @@ CTX_KEY_ORDER = ("molecule", "surface_type", "placement_id", "seed")
 
 
 @contextmanager
+def log_prefix_context(prefix: str):
+    """Map a legacy string prefix onto ``log_context(phase=...)`` when non-empty."""
+    phase = prefix.strip().rstrip(" |:")
+    if not phase:
+        yield
+        return
+    with log_context(phase=phase):
+        yield
+
+
+@contextmanager
 def log_context(**kwargs: Any):
     """Push key-value pairs into logging context for this scope.
 

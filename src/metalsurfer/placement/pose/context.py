@@ -5,6 +5,7 @@ import threading
 from dataclasses import dataclass
 
 import numpy as np
+from ase import Atoms
 
 from ...models import PlacementPose
 from ..site_types import Site
@@ -37,6 +38,26 @@ class _PlacementContext:
     com_lo: float | None = None
     com_nominal: float | None = None
     com_hi: float | None = None
+
+
+def pose_cache_cell(
+    pose_cache: "_PoseBatchCache | None",
+    slab: Atoms,
+) -> np.ndarray:
+    """Return cached cell arrays, else ``slab.get_cell()``."""
+    if pose_cache is not None and pose_cache.cell is not None:
+        return pose_cache.cell
+    return np.asarray(slab.get_cell(), dtype=float)
+
+
+def pose_cache_positions(
+    pose_cache: "_PoseBatchCache | None",
+    slab: Atoms,
+) -> np.ndarray:
+    """Return cached positions, else ``slab.get_positions()``."""
+    if pose_cache is not None and pose_cache.positions is not None:
+        return pose_cache.positions
+    return np.asarray(slab.get_positions(), dtype=float)
 
 
 @dataclass

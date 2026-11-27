@@ -16,14 +16,8 @@ from ase.io import read
 from metalsurfer._geom_pbc import minimum_image_cartesian_delta
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.models import PlacementDescriptor, ScreeningResult
-from metalsurfer.placement.dissociative import (
-    _DISSOCIATIVE_PAIR_CACHE,
-    _DISSOCIATIVE_PAIR_CACHE_LOCK,
-)
-from metalsurfer.placement.site_context import (
-    _SITE_CONTEXT_CACHE,
-    _SITE_CONTEXT_CACHE_LOCK,
-)
+from metalsurfer.placement.dissociative import _DISSOCIATIVE_PAIR_CACHE
+from metalsurfer.placement.site_context import _SITE_CONTEXT_CACHE
 from metalsurfer.surface_prep import Substrate, apply_surface_constraints
 
 from . import _session_flags
@@ -52,6 +46,18 @@ E_ADS_IDENTITY_TOL = 1e-9
 E_ADS_MLIP_TOL = 1e-6
 E_ADS_MLIP_CPU_TOL = 1e-9
 
+
+def assert_energy_identity(
+    result,
+    *,
+    expected_n: float = 1.0,
+    tol: float = E_ADS_IDENTITY_TOL,
+) -> None:
+    """Residual equals ``expected_n`` times the stored per-molecule E_ads."""
+    residual = result.energy_adslab - result.energy_slab - result.energy_adsorbate
+    assert residual == pytest.approx(result.energy_adsorption * expected_n, abs=tol)
+
+
 # Shared TorchSim autobatch settings for GPU e2e modules.
 GPU_AUTOBATCH = {
     "autobatcher_max_memory_padding": 0.8,
@@ -68,17 +74,15 @@ def pytest_configure(config: pytest.Config) -> None:
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Tag every test with quick or cpu; gpu tests stay gpu-only."""
     for item in items:
-        if item.get_closest_marker("gpu"):
-            continue
-        item.add_marker(pytest.mark.cpu)
-        if not (
-            item.get_closest_marker("mlip")
-            or item.get_closest_marker("dependency_behavior")
-            or item.get_closest_marker("slow")
-        ):
-            item.add_marker(pytest.mark.quick)
+        if not item.get_closest_marker("gpu"):
+            item.add_marker(pytest.mark.cpu)
+            if not (
+                item.get_closest_marker("mlip")
+                or item.get_closest_marker("dependency_behavior")
+                or item.get_closest_marker("slow")
+            ):
+                item.add_marker(pytest.mark.quick)
 
-    for item in items:
         has_cpu = item.get_closest_marker("cpu") is not None
         has_gpu = item.get_closest_marker("gpu") is not None
         if has_cpu == has_gpu:
@@ -93,10 +97,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 def clear_placement_caches() -> None:
     """Caches hand back live objects, so each test starts and ends empty."""
-    with _SITE_CONTEXT_CACHE_LOCK:
-        _SITE_CONTEXT_CACHE.clear()
-    with _DISSOCIATIVE_PAIR_CACHE_LOCK:
-        _DISSOCIATIVE_PAIR_CACHE.clear()
+    _SITE_CONTEXT_CACHE.clear()
+    _DISSOCIATIVE_PAIR_CACHE.clear()
 
 
 @pytest.fixture(autouse=True)

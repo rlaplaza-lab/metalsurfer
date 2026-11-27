@@ -53,8 +53,7 @@ from .freeze import (
 
 logger = logging.getLogger(__name__)
 
-# Substrate-cell validity threshold; unrelated to the distance-gating
-# ``CELL_DET_EPS`` in :mod:`metalsurfer._utils` (1e-12, volume presence only).
+# Geometric degeneracy (1e-8); distinct from _utils.CELL_DET_EPS (1e-12 volume).
 _CELL_DET_EPS = 1e-8
 
 
@@ -983,6 +982,8 @@ def substitute_alloy(
     if best_atoms is None:
         message = "Failed to generate any valid alloy slab variants"
         if ranking_failure is not None:
+            if isinstance(ranking_failure, (DependencyMissingError, MemoryError)):
+                raise ranking_failure
             raise GeometryValidationError(
                 f"{message}: {ranking_failure}"
             ) from ranking_failure
@@ -1178,7 +1179,8 @@ def deposit_adatoms(
         # Greedily accept candidate hollow sites whose adatom position keeps at
         # least ``min_adatom_separation`` from every already-accepted adatom
         # (under MIC). Random ``rng.choice`` can pack adatoms 0.78 A apart.
-        accepted: list[np.ndarray] = []
+        accepted_buf = np.empty((n_place, 3), dtype=float)
+        n_accepted = 0
         order = rng.permutation(len(candidate_sites))
         for i in order:
             site = candidate_sites[int(i)]
@@ -1190,8 +1192,8 @@ def deposit_adatoms(
                 else np.array([0.0, 0.0, 1.0])
             )
             pos = site.xyz + float(adsorption_height) * normal
-            if accepted:
-                acc = np.asarray(accepted, dtype=float)
+            if n_accepted > 0:
+                acc = accepted_buf[:n_accepted]
                 deltas = (
                     pos.reshape(1, 1, 3)
                     - acc.reshape(-1, 1, 3)
@@ -1202,22 +1204,24 @@ def deposit_adatoms(
                     < min_adatom_separation
                 ):
                     continue
-            accepted.append(pos)
-            if len(accepted) >= n_place:
+            accepted_buf[n_accepted] = pos
+            n_accepted += 1
+            if n_accepted >= n_place:
                 break
-        if len(accepted) < n_place:
+        accepted = accepted_buf[:n_accepted]
+        if n_accepted < n_place:
             logger.warning(
                 "deposit_adatoms: achieved coverage %d/%d sites at min separation "
                 "%.2f A (requested %d); continuing with the achievable count",
-                len(accepted),
+                n_accepted,
                 n_place,
                 min_adatom_separation,
                 n_place,
             )
         variant = base.copy()
         adatoms = Atoms(
-            symbols=[adatom_symbol] * len(accepted),
-            positions=np.asarray(accepted, dtype=float),
+            symbols=[adatom_symbol] * n_accepted,
+            positions=accepted.copy(),
         )
         adatoms.set_cell(variant.get_cell())
         adatoms.set_pbc(variant.get_pbc())

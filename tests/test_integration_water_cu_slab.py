@@ -12,6 +12,7 @@ from metalsurfer.workflow import calculate_reference_energies, process_molecule
 from tests.conftest import (
     E_ADS_MLIP_TOL,
     GPU_AUTOBATCH,
+    assert_energy_identity,
     assert_water_oh_hh_geometry,
 )
 from tests.mlip_marks import GPU_MLIP_MARKS, load_uma
@@ -88,10 +89,7 @@ def test_run_adsorption_water_on_cu111(workdir):
 
     site_ids = set()
     for r in results:
-        assert r.energy_adsorption == pytest.approx(
-            r.energy_adslab - r.energy_slab - r.energy_adsorbate,
-            abs=E_ADS_MLIP_TOL,
-        )
+        assert_energy_identity(r, tol=E_ADS_MLIP_TOL)
         assert 1.5 <= r.distance <= 4.0, (
             f"Adsorbate–surface distance should be 1.5–4 Å, got {r.distance:.2f}"
         )

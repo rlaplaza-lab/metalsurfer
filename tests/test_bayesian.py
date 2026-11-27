@@ -1,7 +1,5 @@
 """Tests for Bayesian optimisation placement selection pipeline."""
 
-import logging
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -52,9 +50,10 @@ from metalsurfer.workflow.bayesian import (
 )
 from tests.factories import make_random_placement_records
 
-from ._logging_helpers import CaptureHandler
+from ._logging_helpers import capturing_log_records
 from .conftest import (
     E_ADS_MLIP_TOL,
+    assert_energy_identity,
     make_placement_descriptor,
     make_slab,
     make_water,
@@ -788,11 +787,7 @@ class TestTransferSmoke:
 
         # Capture directly on the module logger so the assertion is robust to
         # logger-propagation / caplog-handler quirks across environments.
-        _module_logger = logging.getLogger("metalsurfer.ml.bayesian")
-        _captured: list[logging.LogRecord] = []
-        _handler = CaptureHandler(_captured)
-        _module_logger.addHandler(_handler)
-        try:
+        with capturing_log_records("metalsurfer.ml.bayesian") as _captured:
             result = build_transfer_surrogate(
                 X_current,
                 y_current,
@@ -803,8 +798,6 @@ class TestTransferSmoke:
                 min_similarity=0.0,
                 mae_tolerance=1.0,
             )
-        finally:
-            _module_logger.removeHandler(_handler)
         assert result.surrogate is not None
         assert result.transfer_weight_share > 0.0
         assert any("prior feature columns" in r.message for r in _captured)
@@ -1013,8 +1006,7 @@ def test_bayesian_two_generations_on_defect_surface(tmp_path):
     # The flag is part of the contract for this smoke, not an accidental default.
     assert config.skip_desorption_check is True
     for r in results:
-        residual = r.energy_adslab - r.energy_slab - r.energy_adsorbate
-        assert residual == pytest.approx(r.energy_adsorption, abs=E_ADS_MLIP_TOL)
+        assert_energy_identity(r, tol=E_ADS_MLIP_TOL)
         assert np.isfinite(r.energy_adsorption)
         forces = np.asarray(r.atoms.get_forces(), dtype=float)
         assert np.isfinite(forces).all()

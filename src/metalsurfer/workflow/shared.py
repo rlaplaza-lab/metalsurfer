@@ -14,7 +14,12 @@ import pandas as pd
 from ase import Atoms
 from ase.neighborlist import primitive_neighbor_list
 
-from .._logging import log_context, warn_once
+from .._logging import log_context, log_prefix_context, warn_once
+from .._messages import (
+    MISSING_REFERENCE_ENERGY_FMT,
+    missing_reference_energy,
+    num_placements_must_be_set,
+)
 from .._numeric_defaults import (
     K_B_EV_PER_K,
     MIN_CALCULATOR_CELL_C_ANG,
@@ -465,7 +470,7 @@ def _validate_adsorption(
     if config.skip_desorption_check:
         warn_once(
             logger,
-            "skip_desorption",
+            "shared.skip_desorption",
             "skip_desorption_check=True: desorption distance checks disabled; "
             "results may include desorbed structures",
         )
@@ -487,7 +492,6 @@ def _evaluate_optimized_candidate(
     E_mol: float,
     material_type: str,
     base_slab_for_frozen: Atoms | None = None,
-    log_prefix: str = "",
     surface_prefix_atoms: int | None = None,
 ) -> tuple[ScreeningResult | None, PlacementFailureEvent | None]:
     if opt_atoms is None:
@@ -506,7 +510,7 @@ def _evaluate_optimized_candidate(
         slab_size=len(frozen_reference),
     )
     if not ok:
-        logger.warning("%sfrozen substrate drift: %s", log_prefix, reason)
+        logger.warning("frozen substrate drift: %s", reason)
         return None, PlacementFailureEvent(
             placement_id=placement_id,
             stage="validation",
@@ -518,7 +522,7 @@ def _evaluate_optimized_candidate(
         opt_atoms, slab_atoms, config, material_type=material_type
     )
     if not ok:
-        logger.debug("%sgeometry fail: %s", log_prefix, reason)
+        logger.debug("geometry fail: %s", reason)
         return None, PlacementFailureEvent(
             placement_id=placement_id,
             stage="validation",
@@ -534,7 +538,7 @@ def _evaluate_optimized_candidate(
         surface_prefix_atoms=surface_prefix_atoms,
     )
     if not ok:
-        logger.debug("%sadsorption fail: %s", log_prefix, reason)
+        logger.debug("adsorption fail: %s", reason)
         return None, PlacementFailureEvent(
             placement_id=placement_id,
             stage="validation",
@@ -546,7 +550,7 @@ def _evaluate_optimized_candidate(
     e_ads = e_adslab - E_slab - E_mol
     if e_ads > config.max_adsorption_energy:
         reason = f"E_ads too high: {e_ads:.4f} eV"
-        logger.debug("%sunrealistic E_ads: %.4f eV", log_prefix, e_ads)
+        logger.debug("unrealistic E_ads: %.4f eV", e_ads)
         return None, PlacementFailureEvent(
             placement_id=placement_id,
             stage="energy_cap",
@@ -600,48 +604,48 @@ def _optimize_and_evaluate_placements(
     Returns ``(results, validation_failure_events, n_optimization_failed)``.
     """
     e_slab, e_mol = energies
-    if not (saturation_reuse and config.saturation_autobatcher_reuse):
-        max_n = max((len(a) for a in all_combined), default=0)
-        clear_autobatcher_cache(max_n_atoms_threshold=max_n)
-    optimized = optimize_adsorbate_slab_batched(
-        all_combined,
-        slab,
-        ts_model,
-        config=config,
-        base_slab_for_frozen=base_slab_for_frozen,
-        saturation_reuse=saturation_reuse,
-    )
+    with log_prefix_context(log_prefix):
+        if not (saturation_reuse and config.saturation_autobatcher_reuse):
+            max_n = max((len(a) for a in all_combined), default=0)
+            clear_autobatcher_cache(max_n_atoms_threshold=max_n)
+        optimized = optimize_adsorbate_slab_batched(
+            all_combined,
+            slab,
+            ts_model,
+            config=config,
+            base_slab_for_frozen=base_slab_for_frozen,
+            saturation_reuse=saturation_reuse,
+        )
 
-    results: list[ScreeningResult] = []
-    validation_failure_events: list[PlacementFailureEvent] = []
-    n_optimization_failed = sum(1 for o in optimized if o is None)
-    for opt_atoms, pid, descriptor in zip(
-        optimized, placement_ids, placement_descriptors, strict=True
-    ):
-        with log_context(placement_id=pid):
-            result, failure_event = _evaluate_optimized_candidate(
-                opt_atoms=opt_atoms,
-                placement_id=pid,
-                descriptor=descriptor,
-                molecule_name=molecule_name,
-                slab_atoms=slab,
-                config=config,
-                material_type=material_type,
-                E_slab=e_slab,
-                E_mol=e_mol,
-                base_slab_for_frozen=base_slab_for_frozen,
-                log_prefix=log_prefix,
-                surface_prefix_atoms=surface_prefix_atoms,
-            )
-        if result is None:
-            if failure_event is None:
-                raise RuntimeError(
-                    f"evaluation returned no result or failure for placement_id={pid}"
+        results: list[ScreeningResult] = []
+        validation_failure_events: list[PlacementFailureEvent] = []
+        n_optimization_failed = sum(1 for o in optimized if o is None)
+        for opt_atoms, pid, descriptor in zip(
+            optimized, placement_ids, placement_descriptors, strict=True
+        ):
+            with log_context(placement_id=pid):
+                result, failure_event = _evaluate_optimized_candidate(
+                    opt_atoms=opt_atoms,
+                    placement_id=pid,
+                    descriptor=descriptor,
+                    molecule_name=molecule_name,
+                    slab_atoms=slab,
+                    config=config,
+                    material_type=material_type,
+                    E_slab=e_slab,
+                    E_mol=e_mol,
+                    base_slab_for_frozen=base_slab_for_frozen,
+                    surface_prefix_atoms=surface_prefix_atoms,
                 )
-            validation_failure_events.append(failure_event)
-            continue
-        results.append(result)
-    return results, validation_failure_events, n_optimization_failed
+            if result is None:
+                if failure_event is None:
+                    raise RuntimeError(
+                        f"evaluation returned no result or failure for placement_id={pid}"
+                    )
+                validation_failure_events.append(failure_event)
+                continue
+            results.append(result)
+        return results, validation_failure_events, n_optimization_failed
 
 
 def _filter_and_label_duplicates(
@@ -1232,7 +1236,28 @@ class MoleculeScreeningContext:
     conformer_energies: list[float] | None = None
 
 
-_MISSING_REFERENCE_MSG = "missing reference energy for %s"
+@dataclass(frozen=True)
+class ScreeningPrepareRequest:
+    """Keyword bundle for :func:`_prepare_molecule_screening`."""
+
+    smiles: str
+    molecule_name: str
+    slab: Substrate
+    calculator: Any
+    reference_energies: ReferenceEnergies
+    ts_model: Any
+    config: AdsorptionConfig
+    base_slab_for_frozen: Atoms | None = None
+    slab_energy_override: float | None = None
+    symmetry_broken: bool = False
+    bo_enabled: bool = False
+    conformers: list[Atoms] | None = None
+    conformer_energies: list[float] | None = None
+    skip_workload_autotune: bool = False
+    site_context: SiteContext | None = None
+    surface_type: str = "manual"
+    debug_sites_step: int | None = None
+    reference_smiles: str | None = None
 
 
 def _missing_molecule_reference(
@@ -1240,36 +1265,17 @@ def _missing_molecule_reference(
     config: AdsorptionConfig,
 ) -> ReferenceFailure:
     """Return a soft reference failure, or raise when configured to fail hard."""
+    reason = missing_reference_energy(molecule_name)
     if config.fail_on_missing_reference:
-        logger.error(_MISSING_REFERENCE_MSG, molecule_name)
         raise ValueError(
-            f"{_MISSING_REFERENCE_MSG % molecule_name}; cannot continue with "
-            "fail_on_missing_reference=True"
+            f"{reason}; cannot continue with fail_on_missing_reference=True"
         )
-    logger.warning(_MISSING_REFERENCE_MSG, molecule_name)
-    return ReferenceFailure(reason=_MISSING_REFERENCE_MSG % molecule_name)
+    logger.warning(MISSING_REFERENCE_ENERGY_FMT, molecule_name)
+    return ReferenceFailure(reason=reason)
 
 
 def _prepare_molecule_screening(
-    *,
-    smiles: str,
-    molecule_name: str,
-    slab: Substrate,
-    calculator,
-    reference_energies: ReferenceEnergies,
-    ts_model,
-    config: AdsorptionConfig,
-    base_slab_for_frozen: Atoms | None = None,
-    slab_energy_override: float | None = None,
-    symmetry_broken: bool = False,
-    bo_enabled: bool = False,
-    conformers: list[Atoms] | None = None,
-    conformer_energies: list[float] | None = None,
-    skip_workload_autotune: bool = False,
-    site_context: SiteContext | None = None,
-    surface_type: str = "manual",
-    debug_sites_step: int | None = None,
-    reference_smiles: str | None = None,
+    request: ScreeningPrepareRequest,
 ) -> tuple[MoleculeScreeningContext | None, FailureSummary | None, str]:
     """Shared preamble for standard and BO molecule screening.
 
@@ -1277,37 +1283,50 @@ def _prepare_molecule_screening(
     ``(None, failure, reference_smiles)`` on early bailout.
     ``reference_smiles`` falls back to *smiles*.
     """
-    resolved_reference = smiles if reference_smiles is None else reference_smiles
-    E_slab = (
-        slab_energy_override
-        if slab_energy_override is not None
-        else reference_energies.slab_energy
+    resolved_reference = (
+        request.smiles if request.reference_smiles is None else request.reference_smiles
     )
-    E_mol = reference_energies.get_molecule_energy(molecule_name)
+    E_slab = (
+        request.slab_energy_override
+        if request.slab_energy_override is not None
+        else request.reference_energies.slab_energy
+    )
+    E_mol = request.reference_energies.get_molecule_energy(request.molecule_name)
     if E_mol is None:
         return (
             None,
-            _missing_molecule_reference(molecule_name, config),
+            _missing_molecule_reference(request.molecule_name, request.config),
             resolved_reference,
         )
 
+    conformers = request.conformers
+    conformer_energies = request.conformer_energies
     t0 = time.perf_counter()
     if conformers is None:
-        cached_pack = reference_energies.get_conformer_pack(molecule_name)
+        cached_pack = request.reference_energies.get_conformer_pack(
+            request.molecule_name
+        )
         if cached_pack is not None:
             conformers, conformer_energies = cached_pack
             t_conformers = time.perf_counter() - t0
         else:
             conformer_pack = create_conformers_from_smiles(
-                smiles, calculator=calculator, config=config, ts_model=ts_model
+                request.smiles,
+                calculator=request.calculator,
+                config=request.config,
+                ts_model=request.ts_model,
             )
             t_conformers = time.perf_counter() - t0
             if conformer_pack is None:
-                logger.warning("Could not generate conformers for %s", molecule_name)
+                logger.warning(
+                    "Could not generate conformers for %s", request.molecule_name
+                )
                 return (
                     None,
                     ConformerFailure(
-                        reason=f"could not generate conformers for {molecule_name}"
+                        reason=(
+                            f"could not generate conformers for {request.molecule_name}"
+                        )
                     ),
                     resolved_reference,
                 )
@@ -1317,26 +1336,27 @@ def _prepare_molecule_screening(
     if conformer_energies is not None and len(conformer_energies) != len(conformers):
         raise ValueError(
             f"conformer_energies length {len(conformer_energies)} does not match "
-            f"{len(conformers)} conformers for {molecule_name}"
+            f"{len(conformers)} conformers for {request.molecule_name}"
         )
 
     substrate_ref = prepare_substrate_for_screening(
-        slab,
+        request.slab,
         conformers,
-        base_slab_for_frozen,
-        config,
+        request.base_slab_for_frozen,
+        request.config,
     )
     slab_for_sites = substrate_ref.slab_for_sites
     effective_base_slab_for_frozen = substrate_ref.effective_base_slab_for_frozen
 
+    site_context = request.site_context
     resolved_sites_here = site_context is None
     site_context = site_context_for_sampling(
         slab_for_sites,
-        config,
+        request.config,
         site_context,
-        material_type=slab.material_type,
-        symmetry_broken=symmetry_broken,
-        full_slab=slab.atoms,
+        material_type=request.slab.material_type,
+        symmetry_broken=request.symmetry_broken,
+        full_slab=request.slab.atoms,
     )
     # Binding resolves here; saturation multi-mol dumps once per step at the
     # shared resolve site so we do not rewrite the same overlays per molecule.
@@ -1344,38 +1364,40 @@ def _prepare_molecule_screening(
         _dump_debug_sites_if_enabled(
             slab_for_sites,
             site_context,
-            config,
-            surface_type,
-            step=debug_sites_step,
+            request.config,
+            request.surface_type,
+            step=request.debug_sites_step,
         )
 
-    if skip_workload_autotune or not needs_workload_autotune(config, bo=bo_enabled):
-        resolved = config
+    if request.skip_workload_autotune or not needs_workload_autotune(
+        request.config, bo=request.bo_enabled
+    ):
+        resolved = request.config
     else:
         freeze_ref = (
             effective_base_slab_for_frozen
             if effective_base_slab_for_frozen is not None
-            else slab.atoms
+            else request.slab.atoms
         )
         resolved = resolve_workload_from_geometry(
-            config,
-            ts_model=ts_model,
+            request.config,
+            ts_model=request.ts_model,
             conformers=conformers,
-            slab_atoms=slab.atoms,
+            slab_atoms=request.slab.atoms,
             slab_for_sites=slab_for_sites,
-            smiles=smiles,
-            material_type=slab.material_type,
+            smiles=request.smiles,
+            material_type=request.slab.material_type,
             site_context=site_context,
             freeze_ref=freeze_ref,
-            bo_enabled=bo_enabled,
+            bo_enabled=request.bo_enabled,
             conformer_energies=conformer_energies,
         )
     if resolved.num_placements is None:
-        raise ValueError("config.num_placements must be set")
+        raise ValueError(num_placements_must_be_set())
 
     return (
         MoleculeScreeningContext(
-            slab=slab,
+            slab=request.slab,
             slab_for_sites=slab_for_sites,
             effective_base_slab_for_frozen=effective_base_slab_for_frozen,
             conformers=conformers,

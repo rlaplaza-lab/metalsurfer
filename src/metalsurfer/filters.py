@@ -27,9 +27,10 @@ from scipy.sparse.csgraph import connected_components
 
 from ._logging import warn_once
 from ._numeric_defaults import BINDING_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM
+from ._rdkit import Chem, require_rdkit_chem
 from ._utils import cell_has_volume
 from .config import AdsorptionConfig
-from .exceptions import DependencyMissingError, GeometryValidationError
+from .exceptions import GeometryValidationError
 from .models import ScreeningResult
 from .placement._constants import _OCCUPANCY_SIGMA_SHELL_SCALE
 from .placement._material import material_aware_pbc
@@ -39,12 +40,6 @@ from .placement.geometry import (
     _mol_slab_pairwise_distances,
     calculate_min_distance,
 )
-from .placement.occupancy import lateral_contact_shell as lateral_contact_shell
-
-try:
-    from rdkit import Chem
-except ImportError:  # pragma: no cover - simulated in dependency_behavior tests
-    Chem = None
 
 logger = logging.getLogger(__name__)
 
@@ -161,15 +156,6 @@ class _UnparsedReference:
 
 
 _UNPARSED_REFERENCE = _UnparsedReference()
-
-
-def _require_rdkit_chem() -> None:
-    if Chem is None:
-        raise DependencyMissingError(
-            "rdkit",
-            "check_decomposition",
-            "pip install rdkit",
-        )
 
 
 def _mol_from_smiles(smiles: str):
@@ -503,7 +489,7 @@ def check_decomposition(
     if reference_smiles is None:
         return True, "connectivity intact (no SMILES reference for deeper checks)"
 
-    _require_rdkit_chem()
+    require_rdkit_chem("check_decomposition")
 
     ref_mol = (
         _mol_from_smiles(reference_smiles)
@@ -906,7 +892,7 @@ def filter_results(
     if config.skip_desorption_check:
         warn_once(
             logger,
-            "skip_desorption",
+            "filters.skip_desorption",
             "skip_desorption_check=True: desorption distance checks disabled; "
             "results may include desorbed structures",
         )
@@ -915,7 +901,7 @@ def filter_results(
         prefix = len(slab)
         ref_mol = None
         if reference_smiles:
-            _require_rdkit_chem()
+            require_rdkit_chem("check_decomposition")
             ref_mol = _mol_from_smiles(reference_smiles)
             ref_formula = _formula_from_mol(ref_mol) if ref_mol is not None else None
         else:

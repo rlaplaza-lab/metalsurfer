@@ -144,7 +144,7 @@ class VoronoiGenerator:
                 float(probe_radius),
                 float(max_site_distance),
             )
-            has_topology_atop = any(s == "topology_atop" for s in source_hints)
+            has_topology_atop = "topology_atop" in source_hints
 
         if accessibility_tree is None:
             accessibility_tree = periodic_accessibility_tree(

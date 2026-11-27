@@ -131,11 +131,7 @@ def _prepare_relaxation(
         require_inflight
         and (_deps.InFlightAutoBatcher is None or _deps.ts_constraints is None)
     ):
-        raise DependencyMissingError(
-            "torch-sim-atomistic",
-            context,
-            "Install with: pip install torch-sim-atomistic",
-        )
+        raise _deps.missing_torch_sim(context)
     if ts_model is None:
         raise ValueError("ts_model must not be None")
     optimizer = _resolve_ts_optimizer(config.ts_optimizer)
@@ -498,11 +494,7 @@ def batch_static(
     """
     ts = _deps.ts
     if ts is None:
-        raise DependencyMissingError(
-            "torch-sim-atomistic",
-            "batch_static",
-            "Install with: pip install torch-sim-atomistic",
-        )
+        raise _deps.missing_torch_sim("batch_static")
     if not atoms_list:
         return []
     for i, atoms in enumerate(atoms_list):
@@ -621,6 +613,8 @@ def _forces_for_optimized_systems(
     energies,
     result: list[Atoms],
     ts_model,
+    *,
+    energy_arr: np.ndarray | None = None,
 ) -> Sequence[np.ndarray | None]:
     """Return per-system force arrays, recovering them when the batched run hid them.
 
@@ -644,7 +638,8 @@ def _forces_for_optimized_systems(
         n_systems,
     )
     survivor_idx: list[int] = []
-    energy_arr = _batch_energies_to_numpy(energies)
+    if energy_arr is None:
+        energy_arr = _batch_energies_to_numpy(energies)
     if energy_arr is not None:
         for i in range(n_systems):
             if i < len(energy_arr) and np.isfinite(energy_arr[i]):
@@ -889,13 +884,14 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
         cache_key = setup.cache_key
         if use_autobatcher:
             if ab is None:
-                raise OptimizationError("Could not create autobatcher")
-            if _deps.OPTIM_REGISTRY is None:
-                raise DependencyMissingError(
-                    "torch-sim-atomistic",
-                    "optimize_adsorbate_slab_batched",
-                    "Install with: pip install torch-sim-atomistic",
+                raise OptimizationError(
+                    "Could not create autobatcher "
+                    f"(n_systems={len(combined_atoms_list)}, "
+                    f"max_n_atoms={max_n_atoms}, "
+                    f"optimizer={optimizer!r}, device={model_device!r})"
                 )
+            if _deps.OPTIM_REGISTRY is None:
+                raise _deps.missing_torch_sim("optimize_adsorbate_slab_batched")
             init_fn, step_fn = _deps.OPTIM_REGISTRY[optimizer]
 
             def _build_optim_state_iter():
@@ -975,29 +971,24 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
                 f"expected {n_input}, got {n_returned}. Results are mapped to "
                 "inputs positionally and cannot be realigned."
             )
-        forces_list = _forces_for_optimized_systems(batch, energies, result, ts_model)
         energy_arr = _batch_energies_to_numpy(energies)
+        forces_list = _forces_for_optimized_systems(
+            batch, energies, result, ts_model, energy_arr=energy_arr
+        )
         out: list[Atoms | None] = []
+        bad_energy_idxs: list[int] = []
+        bad_force_idxs: list[int] = []
         for i, atoms in enumerate(result):
             energy_val: float | None = None
             if energy_arr is not None and i < len(energy_arr):
                 energy_val = float(energy_arr[i])
             if energy_val is None or not np.isfinite(energy_val):
-                logger.warning(
-                    "Batched optimisation system %d returned non-finite energy %s; "
-                    "dropping candidate",
-                    i,
-                    energy_val,
-                )
+                bad_energy_idxs.append(i)
                 out.append(None)
                 continue
             forces_i = forces_list[i] if forces_list is not None else None
             if forces_i is None or not np.all(np.isfinite(forces_i)):
-                logger.warning(
-                    "Batched optimisation system %d returned missing/non-finite "
-                    "forces; dropping candidate",
-                    i,
-                )
+                bad_force_idxs.append(i)
                 out.append(None)
                 continue
             calc = TorchSimCalculator(
@@ -1012,6 +1003,20 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
             calc._last_positions_hash = _positions_cell_hash(atoms)
             atoms.calc = calc
             out.append(atoms)
+        if bad_energy_idxs:
+            logger.warning(
+                "Batched optimisation dropped %d system(s) with non-finite energy "
+                "(indices: %s)",
+                len(bad_energy_idxs),
+                bad_energy_idxs,
+            )
+        if bad_force_idxs:
+            logger.warning(
+                "Batched optimisation dropped %d system(s) with missing/non-finite "
+                "forces (indices: %s)",
+                len(bad_force_idxs),
+                bad_force_idxs,
+            )
         n_ok = sum(1 for a in out if a is not None)
         logger.info(
             "Autobatcher optimisation succeeded: %d/%d systems",

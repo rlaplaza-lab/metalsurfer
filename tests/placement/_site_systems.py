@@ -11,10 +11,9 @@ from ase import Atoms
 from ase.build import fcc111
 from ase.data import atomic_numbers, covalent_radii
 
-from metalsurfer._geom_pbc import minimum_image_cartesian_delta
 from metalsurfer.site_plugin_ids import PLUGIN_ALLOWED_MATERIALS
 
-from ..conftest import make_nanoparticle, make_porous_framework
+from ..conftest import make_nanoparticle, make_porous_framework, mic_delta
 
 Order = Literal["regular", "disordered"]
 Material = Literal["slab", "nanoparticle", "porous"]
@@ -54,7 +53,7 @@ def _push_apart_close_pairs(atoms: Atoms, *, min_scale: float = 0.85) -> Atoms:
         moved = False
         for i in range(len(pos)):
             for j in range(i + 1, len(pos)):
-                dvec = minimum_image_cartesian_delta(pos[j] - pos[i], cell, pbc)
+                dvec = mic_delta(pos[j] - pos[i], cell, pbc=pbc)
                 dist = float(np.linalg.norm(dvec))
                 min_d = min_scale * (radii[i] + radii[j])
                 if 1e-8 < dist < min_d:

@@ -4,18 +4,17 @@ import logging
 
 from metalsurfer._logging import _LogStreamToLogger, configure_logging
 
-from ._logging_helpers import CaptureHandler, configured_logger
+from ._logging_helpers import capturing_log_records
 
 
 class TestLogStreamToLogger:
     def test_cr_rate_limited_not_duplicated(self):
         """Rapid CR-only updates within the rate window are coalesced."""
-        logger = logging.getLogger("test.cr.ratelimit")
-        sink: list[logging.LogRecord] = []
-        handler = CaptureHandler(sink)
-        with configured_logger(logger, handler=handler):
+        with capturing_log_records("test.cr.ratelimit") as sink:
             stream = _LogStreamToLogger(
-                logger=logger, level=logging.INFO, carriage_return_rate_limit_s=100.0
+                logger=logging.getLogger("test.cr.ratelimit"),
+                level=logging.INFO,
+                carriage_return_rate_limit_s=100.0,
             )
             stream.write("a\r")
             stream.write("b\r")
@@ -29,12 +28,11 @@ class TestLogStreamToLogger:
 
     def test_cr_emitted_immediately_when_rate_limit_zero(self):
         """With a zero rate limit each CR snapshot is emitted once."""
-        logger = logging.getLogger("test.cr.zerolimit")
-        sink: list[logging.LogRecord] = []
-        handler = CaptureHandler(sink)
-        with configured_logger(logger, handler=handler):
+        with capturing_log_records("test.cr.zerolimit") as sink:
             stream = _LogStreamToLogger(
-                logger=logger, level=logging.INFO, carriage_return_rate_limit_s=0.0
+                logger=logging.getLogger("test.cr.zerolimit"),
+                level=logging.INFO,
+                carriage_return_rate_limit_s=0.0,
             )
             stream.write("a\r")
             stream.write("b\r")
@@ -44,12 +42,11 @@ class TestLogStreamToLogger:
 
     def test_trailing_newline_flushes_pending(self):
         """A trailing newline flushes any buffered (non-CR) content."""
-        logger = logging.getLogger("test.cr.newline")
-        sink: list[logging.LogRecord] = []
-        handler = CaptureHandler(sink)
-        with configured_logger(logger, handler=handler):
+        with capturing_log_records("test.cr.newline") as sink:
             stream = _LogStreamToLogger(
-                logger=logger, level=logging.INFO, carriage_return_rate_limit_s=100.0
+                logger=logging.getLogger("test.cr.newline"),
+                level=logging.INFO,
+                carriage_return_rate_limit_s=100.0,
             )
             stream.write("hello")
             assert len(sink) == 0
@@ -59,12 +56,11 @@ class TestLogStreamToLogger:
 
     def test_flush_emits_trailing_cr_text(self):
         """flush emits the last CR snapshot when no pending line exists."""
-        logger = logging.getLogger("test.cr.flush")
-        sink: list[logging.LogRecord] = []
-        handler = CaptureHandler(sink)
-        with configured_logger(logger, handler=handler):
+        with capturing_log_records("test.cr.flush") as sink:
             stream = _LogStreamToLogger(
-                logger=logger, level=logging.INFO, carriage_return_rate_limit_s=100.0
+                logger=logging.getLogger("test.cr.flush"),
+                level=logging.INFO,
+                carriage_return_rate_limit_s=100.0,
             )
             stream.write("status\r")
             assert len(sink) == 0
@@ -74,12 +70,11 @@ class TestLogStreamToLogger:
 
     def test_newlines_split_records(self):
         """Each newline-terminated chunk becomes its own log record."""
-        logger = logging.getLogger("test.cr.split")
-        sink: list[logging.LogRecord] = []
-        handler = CaptureHandler(sink)
-        with configured_logger(logger, handler=handler):
+        with capturing_log_records("test.cr.split") as sink:
             stream = _LogStreamToLogger(
-                logger=logger, level=logging.INFO, carriage_return_rate_limit_s=100.0
+                logger=logging.getLogger("test.cr.split"),
+                level=logging.INFO,
+                carriage_return_rate_limit_s=100.0,
             )
             stream.write("line1\nline2\n")
             assert len(sink) == 2
@@ -88,12 +83,11 @@ class TestLogStreamToLogger:
 
     def test_incomplete_line_buffered_until_flush(self):
         """Content without a trailing newline is buffered until flush."""
-        logger = logging.getLogger("test.cr.partial")
-        sink: list[logging.LogRecord] = []
-        handler = CaptureHandler(sink)
-        with configured_logger(logger, handler=handler):
+        with capturing_log_records("test.cr.partial") as sink:
             stream = _LogStreamToLogger(
-                logger=logger, level=logging.INFO, carriage_return_rate_limit_s=100.0
+                logger=logging.getLogger("test.cr.partial"),
+                level=logging.INFO,
+                carriage_return_rate_limit_s=100.0,
             )
             stream.write("partial")
             assert len(sink) == 0

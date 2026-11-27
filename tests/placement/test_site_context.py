@@ -743,7 +743,10 @@ def test_debug_write_sites_writes_plugin_and_final_overlays(tmp_path, monkeypatc
     from ase.io import read
 
     from metalsurfer.surface_prep import Substrate
-    from metalsurfer.workflow.shared import _prepare_molecule_screening
+    from metalsurfer.workflow.shared import (
+        ScreeningPrepareRequest,
+        _prepare_molecule_screening,
+    )
 
     from ..conftest import DummyReferenceEnergies
 
@@ -758,18 +761,20 @@ def test_debug_write_sites_writes_plugin_and_final_overlays(tmp_path, monkeypatc
         num_conformers=1,
     )
     ctx, failure, _ = _prepare_molecule_screening(
-        smiles="O",
-        molecule_name="water",
-        slab=Substrate(slab_atoms, material_type="slab"),
-        calculator=None,
-        reference_energies=DummyReferenceEnergies(
-            molecule_energies={"water": -10.0},
-            conformer_packs={"water": ([water], [0.0])},
-        ),
-        ts_model=None,
-        config=config,
-        skip_workload_autotune=True,
-        surface_type=surface_type,
+        ScreeningPrepareRequest(
+            smiles="O",
+            molecule_name="water",
+            slab=Substrate(slab_atoms, material_type="slab"),
+            calculator=None,
+            reference_energies=DummyReferenceEnergies(
+                molecule_energies={"water": -10.0},
+                conformer_packs={"water": ([water], [0.0])},
+            ),
+            ts_model=None,
+            config=config,
+            skip_workload_autotune=True,
+            surface_type=surface_type,
+        )
     )
     assert failure is None
     assert ctx is not None
@@ -796,7 +801,10 @@ def test_debug_write_sites_writes_plugin_and_final_overlays(tmp_path, monkeypatc
 
 def test_debug_write_sites_step_suffix_from_prepare(tmp_path, monkeypatch):
     from metalsurfer.surface_prep import Substrate
-    from metalsurfer.workflow.shared import _prepare_molecule_screening
+    from metalsurfer.workflow.shared import (
+        ScreeningPrepareRequest,
+        _prepare_molecule_screening,
+    )
 
     from ..conftest import DummyReferenceEnergies
 
@@ -810,19 +818,21 @@ def test_debug_write_sites_step_suffix_from_prepare(tmp_path, monkeypatch):
         num_conformers=1,
     )
     ctx, failure, _ = _prepare_molecule_screening(
-        smiles="O",
-        molecule_name="water",
-        slab=Substrate(make_slab(nx=4, ny=4), material_type="slab"),
-        calculator=None,
-        reference_energies=DummyReferenceEnergies(
-            molecule_energies={"water": -10.0},
-            conformer_packs={"water": ([water], [0.0])},
-        ),
-        ts_model=None,
-        config=config,
-        skip_workload_autotune=True,
-        surface_type=surface_type,
-        debug_sites_step=3,
+        ScreeningPrepareRequest(
+            smiles="O",
+            molecule_name="water",
+            slab=Substrate(make_slab(nx=4, ny=4), material_type="slab"),
+            calculator=None,
+            reference_energies=DummyReferenceEnergies(
+                molecule_energies={"water": -10.0},
+                conformer_packs={"water": ([water], [0.0])},
+            ),
+            ts_model=None,
+            config=config,
+            skip_workload_autotune=True,
+            surface_type=surface_type,
+            debug_sites_step=3,
+        )
     )
     assert failure is None
     assert ctx is not None
@@ -834,7 +844,10 @@ def test_debug_write_sites_step_suffix_from_prepare(tmp_path, monkeypatch):
 
 def test_debug_write_sites_skips_when_site_context_pre_supplied(tmp_path, monkeypatch):
     from metalsurfer.surface_prep import Substrate
-    from metalsurfer.workflow.shared import _prepare_molecule_screening
+    from metalsurfer.workflow.shared import (
+        ScreeningPrepareRequest,
+        _prepare_molecule_screening,
+    )
 
     from ..conftest import DummyReferenceEnergies
 
@@ -850,20 +863,22 @@ def test_debug_write_sites_skips_when_site_context_pre_supplied(tmp_path, monkey
     )
     pre = _get_unique_sites_for_specs(slab, config, material_type="slab")
     ctx, failure, _ = _prepare_molecule_screening(
-        smiles="O",
-        molecule_name="water",
-        slab=Substrate(slab, material_type="slab"),
-        calculator=None,
-        reference_energies=DummyReferenceEnergies(
-            molecule_energies={"water": -10.0},
-            conformer_packs={"water": ([water], [0.0])},
-        ),
-        ts_model=None,
-        config=config,
-        skip_workload_autotune=True,
-        surface_type=surface_type,
-        site_context=pre,
-        debug_sites_step=1,
+        ScreeningPrepareRequest(
+            smiles="O",
+            molecule_name="water",
+            slab=Substrate(slab, material_type="slab"),
+            calculator=None,
+            reference_energies=DummyReferenceEnergies(
+                molecule_energies={"water": -10.0},
+                conformer_packs={"water": ([water], [0.0])},
+            ),
+            ts_model=None,
+            config=config,
+            skip_workload_autotune=True,
+            surface_type=surface_type,
+            site_context=pre,
+            debug_sites_step=1,
+        )
     )
     assert failure is None
     assert ctx is not None
@@ -874,7 +889,10 @@ def test_debug_write_sites_skips_when_site_context_pre_supplied(tmp_path, monkey
 
 def test_debug_write_sites_off_writes_nothing(tmp_path, monkeypatch):
     from metalsurfer.surface_prep import Substrate
-    from metalsurfer.workflow.shared import _prepare_molecule_screening
+    from metalsurfer.workflow.shared import (
+        ScreeningPrepareRequest,
+        _prepare_molecule_screening,
+    )
 
     from ..conftest import DummyReferenceEnergies
 
@@ -888,18 +906,20 @@ def test_debug_write_sites_off_writes_nothing(tmp_path, monkeypatch):
     )
     water = make_water()
     ctx, failure, _ = _prepare_molecule_screening(
-        smiles="O",
-        molecule_name="water",
-        slab=Substrate(make_slab(nx=4, ny=4), material_type="slab"),
-        calculator=None,
-        reference_energies=DummyReferenceEnergies(
-            molecule_energies={"water": -10.0},
-            conformer_packs={"water": ([water], [0.0])},
-        ),
-        ts_model=None,
-        config=config,
-        skip_workload_autotune=True,
-        surface_type=surface_type,
+        ScreeningPrepareRequest(
+            smiles="O",
+            molecule_name="water",
+            slab=Substrate(make_slab(nx=4, ny=4), material_type="slab"),
+            calculator=None,
+            reference_energies=DummyReferenceEnergies(
+                molecule_energies={"water": -10.0},
+                conformer_packs={"water": ([water], [0.0])},
+            ),
+            ts_model=None,
+            config=config,
+            skip_workload_autotune=True,
+            surface_type=surface_type,
+        )
     )
     assert failure is None
     assert ctx is not None

@@ -1,12 +1,11 @@
 """Thin CPU integration smoke: real MLIP via process_molecule."""
 
 import numpy as np
-import pytest
 
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.surface_prep import Substrate
 from metalsurfer.workflow import calculate_reference_energies, process_molecule
-from tests.conftest import E_ADS_MLIP_CPU_TOL, make_slab
+from tests.conftest import E_ADS_MLIP_CPU_TOL, assert_energy_identity, make_slab
 from tests.mlip_marks import MLIP_CPU_MARKS, load_uma
 
 pytestmark = MLIP_CPU_MARKS
@@ -57,7 +56,4 @@ def test_process_molecule_water_on_small_slab_cpu():
 
     for r in results:
         assert np.isfinite(r.energy_adsorption)
-        assert r.energy_adsorption == pytest.approx(
-            r.energy_adslab - r.energy_slab - r.energy_adsorbate,
-            abs=E_ADS_MLIP_CPU_TOL,
-        )
+        assert_energy_identity(r, tol=E_ADS_MLIP_CPU_TOL)

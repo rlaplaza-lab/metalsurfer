@@ -26,7 +26,10 @@ from ._csv_coerce import (
 from ._csv_coerce import (
     parse_fragment_positions as _row_parse_fragment_positions,
 )
-from ._csv_coerce import require_key
+from ._csv_coerce import (
+    require_key,
+)
+from ._messages import missing_required_column
 from .reporting import (
     FailureSummary,
 )
@@ -43,10 +46,13 @@ from .reporting import (
     format_saturation_completion as _format_saturation_completion,
 )
 from .result_paths import (
+    conformer_poscar_relpath,
+    conformer_xyz_name,
     molecule_all_vasp_dir,
     molecule_all_xyz_dir,
     saturation_vasp_dir,
     saturation_xyz_dir,
+    step_placements_dirname,
 )
 
 
@@ -179,7 +185,7 @@ def _require_row_value(row: Mapping[str, Any], key: str) -> Any:
     """Return a required CSV cell; missing or blank raises ``ValueError``."""
     value = require_key(row, key)
     if _row_is_missing(value):
-        raise ValueError(f"missing required column {key!r}")
+        raise ValueError(missing_required_column(key))
     return value
 
 
@@ -407,17 +413,18 @@ class PlacementDescriptor:
         }
         if placement_index is not None:
             pid = int(placement_index)
-        elif "placement_id" in row and not _row_is_missing(row.get("placement_id")):
-            pid = int(row["placement_id"])
-        elif "placement_index" in row and not _row_is_missing(
-            row.get("placement_index")
-        ):
-            pid = int(row["placement_index"])
         else:
-            raise ValueError(
-                "PlacementDescriptor.from_row requires placement_index=... "
-                "or a 'placement_id'/'placement_index' column"
-            )
+            placement_id = row.get("placement_id")
+            placement_idx = row.get("placement_index")
+            if not _row_is_missing(placement_id):
+                pid = int(placement_id)
+            elif not _row_is_missing(placement_idx):
+                pid = int(placement_idx)
+            else:
+                raise ValueError(
+                    "PlacementDescriptor.from_row requires placement_index=... "
+                    "or a 'placement_id'/'placement_index' column"
+                )
 
         if not _row_has_initial_columns(row):
             values = _lean_placeholder_values()
@@ -614,9 +621,9 @@ class ScreeningRunResult:
 
         for sr in self.results:
             pid = sr.placement_id
-            xyz_path = str(xyz_dir / f"conformer_{pid:03d}.xyz") if xyz_dir else None
+            xyz_path = str(xyz_dir / conformer_xyz_name(pid)) if xyz_dir else None
             poscar_path = (
-                str(vasp_dir / f"conformer_{pid:03d}" / "POSCAR")
+                str(vasp_dir / conformer_poscar_relpath(pid))
                 if vasp_dir is not None
                 else None
             )
@@ -755,8 +762,8 @@ def _placement_rows_for_results(
 ) -> list[dict[str, Any]]:
     return [
         r.to_row(
-            xyz_path=str(step_xyz / f"conformer_{r.placement_id:03d}.xyz"),
-            poscar_path=str(step_vasp / f"conformer_{r.placement_id:03d}" / "POSCAR")
+            xyz_path=str(step_xyz / conformer_xyz_name(r.placement_id)),
+            poscar_path=str(step_vasp / conformer_poscar_relpath(r.placement_id))
             if step_vasp is not None
             else None,
             context_row=context_row,
@@ -797,7 +804,7 @@ def _saturation_step_placement_dirs(
     step_prefix: bool = True,
 ) -> tuple[Path, Path | None]:
     """Return ``(xyz_dir, vasp_dir_or_none)`` for one saturation step."""
-    rel = f"step_{step:03d}_placements" if step_prefix else "placements"
+    rel = step_placements_dirname(step) if step_prefix else "placements"
     base = Path(results_dir)
     step_xyz = saturation_xyz_dir(base, mol_dir_label) / rel
     step_vasp = (

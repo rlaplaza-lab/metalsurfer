@@ -35,7 +35,6 @@ from metalsurfer.placement.site_adaptive_grid import (
 )
 from metalsurfer.placement.site_context import (
     _SITE_CONTEXT_CACHE,
-    _SITE_CONTEXT_CACHE_LOCK,
     resolve_site_context_for_sampling,
 )
 from metalsurfer.placement.site_coords import (
@@ -636,8 +635,7 @@ def test_adaptive_grid_site_context_uses_shared_symmetry_path():
         n_jobs=1,
         slab_relaxation_mode="none",
     )
-    with _SITE_CONTEXT_CACHE_LOCK:
-        _SITE_CONTEXT_CACHE.clear()
+    _SITE_CONTEXT_CACHE.clear()
     ctx = resolve_site_context_for_sampling(
         slab, cfg, symmetry_broken=False, material_type="slab"
     )

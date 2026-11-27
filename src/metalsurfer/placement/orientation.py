@@ -6,7 +6,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from ..exceptions import DependencyMissingError
+from .._rdkit import require_rdkit_chem
 from ..models import PlacementSpec
 from . import geometry as geom
 from ._constants import (
@@ -19,19 +19,6 @@ from ._constants import (
     _PARALLEL_FRACTION_NO_RING,
     _PARALLEL_FRACTION_SINGLE_BINDER,
 )
-
-
-def _rdkit_chem():
-    """Return ``rdkit.Chem`` (lazy import for dependency_behavior tests)."""
-    try:
-        from rdkit import Chem
-    except ImportError as exc:
-        raise DependencyMissingError(
-            "rdkit",
-            "placement aromatic and ring heuristics",
-            "pip install rdkit",
-        ) from exc
-    return Chem
 
 
 def _is_flat_aromatic(
@@ -57,7 +44,7 @@ def _is_flat_aromatic(
 @lru_cache(maxsize=256)
 def _smiles_aromatic_binder_info(smiles: str) -> tuple[bool, int] | None:
     """Parse *smiles* once: ``(flat_aromatic_with_en, n_aromatic_atoms)`` or None."""
-    Chem = _rdkit_chem()
+    Chem = require_rdkit_chem("placement aromatic and ring heuristics")
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return None
@@ -80,7 +67,7 @@ def _smiles_tag_charge_indices(
     so these indices address conformers from
     ``create_conformers_from_smiles``. ``None`` marks a failed parse.
     """
-    Chem = _rdkit_chem()
+    Chem = require_rdkit_chem("placement aromatic and ring heuristics")
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return None

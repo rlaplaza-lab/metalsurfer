@@ -31,6 +31,7 @@ from metalsurfer.workflow.shared import (
 
 from .conftest import (
     E_ADS_IDENTITY_TOL,
+    assert_energy_identity,
     assert_water_oh_hh_geometry,
     make_placement_descriptor,
     make_screening_result,
@@ -257,10 +258,7 @@ class TestAdsorptionEnergyPhysics:
         assert result.energy_adsorption == pytest.approx(
             e_ads_ok, abs=E_ADS_IDENTITY_TOL
         )
-        assert result.energy_adsorption == pytest.approx(
-            result.energy_adslab - result.energy_slab - result.energy_adsorbate,
-            abs=E_ADS_IDENTITY_TOL,
-        )
+        assert_energy_identity(result)
 
         capped = _attach_calc(good, energy=e_slab + e_mol + e_ads_cap)
         result_cap, failure_cap = _evaluate_optimized_candidate(
@@ -409,10 +407,7 @@ class TestProcessMoleculePhysicsSurvival:
             assert r.energy_adsorption == pytest.approx(
                 e_ads_good, abs=E_ADS_IDENTITY_TOL
             )
-            assert r.energy_adsorption == pytest.approx(
-                r.energy_adslab - r.energy_slab - r.energy_adsorbate,
-                abs=E_ADS_IDENTITY_TOL,
-            )
+            assert_energy_identity(r)
             assert 1.5 <= r.distance <= 4.0, (
                 f"Survivor must remain adsorbed (1.5–4 Å), got {r.distance:.2f}"
             )

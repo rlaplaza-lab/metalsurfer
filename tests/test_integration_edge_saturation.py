@@ -9,24 +9,16 @@ from __future__ import annotations
 
 import numpy as np
 
-from metalsurfer.config import AdsorptionConfig
 from tests.edge_chemistry_helpers import (
     _OLEIC_FORMULA,
     _PME3_FORMULA,
     _PYRIDONE_FORMULA,
     assert_intact,
     carboxyl_down,
+    edge_adsorption_config,
     p_nearer_au_than_carbons,
 )
 from tests.edge_placement_snapshots import frame_atoms, load_snapshot, pose_atoms
-
-
-def _config(material_type: str) -> AdsorptionConfig:
-    return AdsorptionConfig(
-        seed=42,
-        device="cpu",
-        slab_relaxation_mode="none",
-    )
 
 
 def _placements(snapshot: dict[str, object]) -> list[dict[str, object]]:
@@ -49,7 +41,7 @@ def test_pme3_au4_short_draw_keeps_every_site_type() -> None:
     """Eight Au4 placements cover atop, bridge, and hollow, with P toward gold."""
     snapshot = load_snapshot("pme3_au4_8")
     slab = frame_atoms(snapshot["slab"])
-    config = _config("nanoparticle")
+    config = edge_adsorption_config()
     poses = _placements(snapshot)
     explored_types = {str(pose["descriptor"]["site_type"]) for pose in poses}
     assert {"atop", "bridge", "hollow"} <= explored_types
@@ -68,7 +60,7 @@ def test_pyridone_step2_short_draw_explores_a_neighbor_site() -> None:
     The NH···O geometry is checked on the 100-placement snapshot.
     """
     snapshot = load_snapshot("pyridone_step2_16")
-    config = _config("slab")
+    config = edge_adsorption_config()
     poses = _placements(snapshot)
     for pose in poses:
         assert_intact(pose_atoms(snapshot, pose), _PYRIDONE_FORMULA, config)
@@ -81,7 +73,7 @@ def test_pyridone_pool_short_draw_reaches_contact_height() -> None:
     The packed NH···O dimer is the pair-budget assembly check.
     """
     snapshot = load_snapshot("pyridone_pool_16")
-    config = _config("slab")
+    config = edge_adsorption_config()
     poses = _placements(snapshot)
     for pose in poses:
         assert_intact(pose_atoms(snapshot, pose), _PYRIDONE_FORMULA, config)
@@ -91,7 +83,7 @@ def test_pyridone_pool_short_draw_reaches_contact_height() -> None:
 def test_oleic_step2_short_draw_has_a_carboxyl_down_neighbor() -> None:
     """One of the sixteen covered oleic poses points the carboxyl at a neighbor site."""
     snapshot = load_snapshot("oleic_step2_16")
-    config = _config("slab")
+    config = edge_adsorption_config()
     slab = frame_atoms(snapshot["slab"])
     slab_pos = np.asarray(slab.get_positions(), dtype=float)
     cell = np.asarray(slab.get_cell(), dtype=float)

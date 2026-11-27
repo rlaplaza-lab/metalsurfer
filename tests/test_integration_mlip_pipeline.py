@@ -23,6 +23,7 @@ from tests.conftest import (
     E_ADS_MLIP_TOL,
     GPU_AUTOBATCH,
     adsorbate_symbol_pair_distance,
+    assert_energy_identity,
     pair_distance,
 )
 from tests.mlip_marks import GPU_MLIP_MARKS, load_uma
@@ -213,10 +214,7 @@ def _assert_ethene_ru(results: list[ScreeningResult], num_placements: int) -> No
 
     slab_size = len(results[0].atoms) - 6
     for r in results:
-        assert r.energy_adsorption == pytest.approx(
-            r.energy_adslab - r.energy_slab - r.energy_adsorbate,
-            abs=E_ADS_MLIP_TOL,
-        )
+        assert_energy_identity(r, tol=E_ADS_MLIP_TOL)
         assert 1.5 <= r.distance <= 4.0, (
             f"Adsorbate–surface distance should be 1.5–4 Å, got {r.distance:.2f}"
         )
@@ -262,10 +260,7 @@ def _assert_h2_ru(results: list[ScreeningResult], num_placements: int) -> None:
 
     site_ids = set()
     for r in results:
-        assert r.energy_adsorption == pytest.approx(
-            r.energy_adslab - r.energy_slab - r.energy_adsorbate,
-            abs=E_ADS_MLIP_TOL,
-        )
+        assert_energy_identity(r, tol=E_ADS_MLIP_TOL)
         assert r.placement_descriptor.orientation_type == "dissociative"
         assert r.placement_descriptor.site_source == "dissociative_hollow_pair"
         assert 1.5 <= r.distance <= 4.0, (
@@ -315,10 +310,7 @@ def _assert_h2_pt13(results: list[ScreeningResult], num_placements: int) -> None
 
     slab_size = len(results[0].atoms) - 2
     for r in results:
-        assert r.energy_adsorption == pytest.approx(
-            r.energy_adslab - r.energy_slab - r.energy_adsorbate,
-            abs=E_ADS_MLIP_TOL,
-        )
+        assert_energy_identity(r, tol=E_ADS_MLIP_TOL)
         assert r.placement_descriptor is not None
         assert r.placement_descriptor.orientation_type == "dissociative"
         assert r.placement_descriptor.site_type == "hollow"
@@ -376,10 +368,7 @@ def _assert_co2_mof(results: list[ScreeningResult], num_placements: int) -> None
     site_ids = set()
     slab_size = len(results[0].atoms) - 3
     for r in results:
-        assert r.energy_adsorption == pytest.approx(
-            r.energy_adslab - r.energy_slab - r.energy_adsorbate,
-            abs=E_ADS_MLIP_TOL,
-        )
+        assert_energy_identity(r, tol=E_ADS_MLIP_TOL)
         assert 1.5 <= r.distance <= 4.0, (
             f"Adsorbate–surface distance should be 1.5–4.0 Å, got {r.distance:.2f}"
         )

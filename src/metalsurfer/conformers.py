@@ -6,25 +6,25 @@ from typing import Any
 import numpy as np
 from ase import Atoms
 
+from ._logging import warn_once
+from ._messages import RDKIT_INSTALL_HINT
 from ._numeric_defaults import (
     ENERGY_DEDUP_THRESHOLD_DEFAULT_EV,
     RMSD_DEDUP_THRESHOLD_DEFAULT_ANGSTROM,
 )
+from ._rdkit import require_rdkit_chem
 from .config import AdsorptionConfig
 from .exceptions import DependencyMissingError
 
 logger = logging.getLogger(__name__)
 
-Chem: Any = None
 AllChem: Any = None
 try:
-    from rdkit import Chem as _rdkit_chem
     from rdkit.Chem import AllChem as _rdkit_allchem
 
-    Chem = _rdkit_chem
     AllChem = _rdkit_allchem
 except (ImportError, AttributeError):
-    logger.debug("RDKit optional import unavailable", exc_info=True)
+    logger.debug("RDKit AllChem optional import unavailable", exc_info=True)
 
 
 def create_conformers_from_smiles(
@@ -54,11 +54,12 @@ def create_conformers_from_smiles(
     ts_model
         Optional TorchSim model for batched scoring.
     """
-    if Chem is None or AllChem is None:
+    Chem = require_rdkit_chem("create_conformers_from_smiles")
+    if AllChem is None:
         raise DependencyMissingError(
             "rdkit",
             "create_conformers_from_smiles",
-            "Install it with: pip install rdkit",
+            RDKIT_INSTALL_HINT,
         )
 
     mol = Chem.MolFromSmiles(smiles)
@@ -82,18 +83,25 @@ def create_conformers_from_smiles(
             return None
         conf_ids = [0]
 
+    mmff_unsupported: list[int] = []
     for conf_id in conf_ids:
         mmff_result = AllChem.MMFFOptimizeMolecule(mol, confId=conf_id)
         if mmff_result == -1:
-            logger.warning(
-                "MMFF optimization failed for conformer %d of %s (unsupported atom types)",
-                conf_id,
-                smiles,
-            )
+            mmff_unsupported.append(int(conf_id))
         elif mmff_result == 1:
             logger.debug(
                 "MMFF did not converge for conformer %d of %s", conf_id, smiles
             )
+    if mmff_unsupported:
+        warn_once(
+            logger,
+            f"mmff_unsupported:{smiles}",
+            "MMFF optimization failed for %d conformer(s) of %s "
+            "(unsupported atom types; conf_ids=%s)",
+            len(mmff_unsupported),
+            smiles,
+            mmff_unsupported,
+        )
 
     symbols = [atom.GetSymbol() for atom in mol.GetAtoms()]
     conformers: list[Atoms] = []
@@ -205,10 +213,10 @@ def _kabsch_rmsd(
     cross-covariance) before measuring RMSD against ``pos_b``. Returns ``inf``
     when the atom counts disagree.
     """
-    if np.asarray(pos_a).shape != np.asarray(pos_b).shape:
-        return float("inf")
     a = np.asarray(pos_a, dtype=float)
     b = np.asarray(pos_b, dtype=float)
+    if a.shape != b.shape:
+        return float("inf")
     if not centered:
         a = a - np.mean(a, axis=0)
         b = b - np.mean(b, axis=0)

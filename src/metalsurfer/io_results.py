@@ -29,15 +29,20 @@ from .models import (
 from .result_paths import (
     ADSORPTION_ENERGIES_DETAILED_CSV,
     ADSORPTION_ENERGY_SUMMARY_CSV,
+    FINAL_SATURATED_SLAB_XYZ,
     SATURATION_DETAILS_CSV,
     SATURATION_PLACEMENTS_DETAILED_CSV,
     SATURATION_SUMMARY_CSV,
+    conformer_adsorbate_xyz_name,
+    conformer_dir_name,
+    conformer_xyz_name,
     molecule_adsorbate_only_dir,
     molecule_all_vasp_dir,
     molecule_all_xyz_dir,
     results_dir_for,
     saturation_vasp_dir,
     saturation_xyz_dir,
+    step_placements_dirname,
 )
 
 logger = logging.getLogger(__name__)
@@ -169,9 +174,9 @@ def _write_placement_artifacts(
     xyz_base = Path(xyz_dir)
     ads_base = Path(adsorbate_xyz_dir)
     vasp_base = Path(vasp_parent)
-    xyz_file = xyz_base / f"conformer_{pid:03d}.xyz"
-    adsorbate_xyz_file = ads_base / f"conformer_{pid:03d}_adsorbate.xyz"
-    vasp_subdir = vasp_base / f"conformer_{pid:03d}"
+    xyz_file = xyz_base / conformer_xyz_name(pid)
+    adsorbate_xyz_file = ads_base / conformer_adsorbate_xyz_name(pid)
+    vasp_subdir = vasp_base / conformer_dir_name(pid)
     _write_clean_xyz(entry.atoms, str(xyz_file))
     adsorbate_atoms = entry.atoms[entry.slab_size :]
     _write_clean_xyz(adsorbate_atoms, str(adsorbate_xyz_file))
@@ -552,7 +557,7 @@ def _write_saturation_placement_tree(
 
 
 def _write_final_saturated_slab(atoms: Atoms, mol_dir: str) -> None:
-    _write_clean_xyz(atoms, f"{mol_dir}/final_saturated_slab.xyz")
+    _write_clean_xyz(atoms, str(Path(mol_dir) / FINAL_SATURATED_SLAB_XYZ))
 
 
 def _write_saturation_run_structures(
@@ -577,7 +582,7 @@ def _write_saturation_run_structures(
         )
         if not save_all:
             continue
-        rel = f"step_{step:03d}_placements"
+        rel = step_placements_dirname(step)
         if isinstance(step_result, MultiMolSaturationStepResult):
             for pmol, res_list in step_result.per_molecule_results.items():
                 _write_saturation_placement_tree(
@@ -872,7 +877,7 @@ def save_saturation_results(
                 "n_steps": len(sr.steps),
                 "final_slab_path": (
                     saturation_xyz_dir(results_dir, sr.molecule)
-                    / "final_saturated_slab.xyz"
+                    / FINAL_SATURATED_SLAB_XYZ
                 ).as_posix(),
             }
             for sr in singles
@@ -944,9 +949,9 @@ def save_multi_mol_saturation_results(
                 "n_steps": len(result.steps),
                 "molecule_counts": str(result.molecule_counts),
                 "final_slab_path": (
-                    f"{saturation_xyz_dir(results_dir, mol_label).as_posix()}"
-                    "/final_saturated_slab.xyz"
-                ),
+                    saturation_xyz_dir(results_dir, mol_label)
+                    / FINAL_SATURATED_SLAB_XYZ
+                ).as_posix(),
             }
         ],
         structure_runs=[

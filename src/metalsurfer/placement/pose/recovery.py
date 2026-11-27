@@ -40,7 +40,12 @@ from .checks import (
     _saturation_exclude_count,
     _validate_posed_adsorbate,
 )
-from .context import _PlacementContext, _PoseBatchCache, _require_pose_z_abs
+from .context import (
+    _PlacementContext,
+    _PoseBatchCache,
+    _require_pose_z_abs,
+    pose_cache_cell,
+)
 from .height import (
     _placement_normal_hat,
     _z_fraction_from_com_height,
@@ -267,11 +272,7 @@ def _apply_lateral_offset(
     v = np.cross(n_hat, u)
     shifted = np.asarray(center, dtype=float) + float(dx) * u + float(dy) * v
     if ctx.mat_type == "slab":
-        cell = (
-            pose_cache.cell
-            if pose_cache is not None and pose_cache.cell is not None
-            else np.asarray(slab.get_cell(), dtype=float)
-        )
+        cell = pose_cache_cell(pose_cache, slab)
         return _frac_to_cart(_wrapped_slab_fractional(shifted, cell), cell)
     return shifted
 

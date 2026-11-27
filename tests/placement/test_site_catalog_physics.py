@@ -10,7 +10,6 @@ from ase import Atoms
 from ase.data import atomic_numbers, covalent_radii
 from scipy.spatial import ConvexHull, KDTree
 
-from metalsurfer._geom_pbc import minimum_image_cartesian_delta
 from metalsurfer.placement._constants import _ADAPTIVE_GRID_DEFAULT_SPACING
 from metalsurfer.placement._material import material_aware_pbc
 from metalsurfer.placement.geometry import framework_radii_from_symbols
@@ -41,6 +40,7 @@ from metalsurfer.placement.site_types import Site, site_kind_from_type_and_suppo
 from metalsurfer.placement.site_wall_near_common import wall_near_clearance_window
 from metalsurfer.symmetry import SymmetryAnalysisError
 
+from ..conftest import mic_delta
 from ._site_systems import (
     _CHANNEL_AXIS_XY,
     _CHANNEL_R_O,
@@ -608,11 +608,7 @@ def test_sio_channel_has_tetrahedral_bond_length():
     bonds = []
     for oi in ox:
         ds = [
-            float(
-                np.linalg.norm(
-                    minimum_image_cartesian_delta(pos[oi] - pos[si_i], cell, pbc)
-                )
-            )
+            float(np.linalg.norm(mic_delta(pos[oi] - pos[si_i], cell, pbc=pbc)))
             for si_i in si
         ]
         bonds.append(min(ds))
