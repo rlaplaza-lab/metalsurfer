@@ -800,7 +800,7 @@ class TestTransferSmoke:
             )
         assert result.surrogate is not None
         assert result.transfer_weight_share > 0.0
-        assert any("prior feature columns" in r.message for r in _captured)
+        assert any("prior feature columns" in r.getMessage() for r in _captured)
 
     def test_require_transfer_surrogate_rejects_gaussian_process(self):
         from metalsurfer.config import require_transfer_capable_surrogate
