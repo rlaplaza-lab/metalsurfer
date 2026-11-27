@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from ase import Atoms
 
+from .._messages import num_placements_must_be_set
 from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementSpec
 from ..placement.generators import (
@@ -356,7 +357,7 @@ def fill_materialized_placements(
     """
     n_target = config.num_placements
     if n_target is None:
-        raise ValueError("num_placements must be set before materializing placements")
+        raise ValueError(num_placements_must_be_set("before materializing placements"))
 
     grid_info = _spec_grid_info(
         conformers,

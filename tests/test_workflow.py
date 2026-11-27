@@ -9,7 +9,6 @@ import pytest
 from ase import Atoms
 from scipy.spatial.distance import pdist
 
-from metalsurfer._geom_pbc import minimum_image_cartesian_delta
 from metalsurfer.config import AdsorptionConfig, BOConfig
 from metalsurfer.io_results import (
     save_molecule_results,
@@ -56,6 +55,7 @@ from .conftest import (
     make_screening_result,
     make_slab,
     make_water,
+    mic_delta,
     place_molecule_on_slab,
 )
 
@@ -187,9 +187,7 @@ class TestValidateGeometry:
         assert "too close" in reason
         # Cartesian NN would see ~a_len and pass; MIC must sit under the cutoff.
         delta = atoms.get_positions()[1] - atoms.get_positions()[0]
-        mic = minimum_image_cartesian_delta(
-            delta, cell, np.asarray(atoms.get_pbc(), dtype=bool)
-        )
+        mic = mic_delta(delta, cell, pbc=atoms.get_pbc())
         assert float(np.linalg.norm(mic)) < config.min_interatomic_distance
 
     def test_atoms_too_close_across_xy_wrap_fails(self):
@@ -213,9 +211,7 @@ class TestValidateGeometry:
         assert not ok
         assert "too close" in reason
         delta = atoms.get_positions()[1] - atoms.get_positions()[0]
-        mic = minimum_image_cartesian_delta(
-            delta, cell, np.asarray(atoms.get_pbc(), dtype=bool)
-        )
+        mic = mic_delta(delta, cell, pbc=atoms.get_pbc())
         assert float(np.linalg.norm(mic)) < config.min_interatomic_distance
 
     def test_atoms_just_above_cutoff_passes(self):

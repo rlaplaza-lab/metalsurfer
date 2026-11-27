@@ -28,6 +28,18 @@ _HBOND_HO_HI_ANG = 2.50
 _SLAB_PBC = material_aware_pbc("slab")
 _COVERAGE_PLACEMENTS = 100
 
+
+def edge_adsorption_config(**overrides: object) -> AdsorptionConfig:
+    """CPU edge-placement defaults with optional overrides."""
+    defaults: dict[str, object] = {
+        "seed": 42,
+        "device": "cpu",
+        "slab_relaxation_mode": "none",
+    }
+    defaults.update(overrides)
+    return AdsorptionConfig(**defaults)
+
+
 _PME3_SMILES = "C[P:1](C)C"
 _PYRIDONE_SMILES = "O=c1cccc[nH]1"
 _OLEIC_SMILES = r"CCCCCCCC/C=C\CCCCCCCC(=O)O"

@@ -18,7 +18,12 @@ from .checks import (
     _saturation_exclude_count,
     _validate_posed_adsorbate,
 )
-from .context import _PlacementContext, _PoseBatchCache, _require_pose_z_abs
+from .context import (
+    _PlacementContext,
+    _PoseBatchCache,
+    _require_pose_z_abs,
+    pose_cache_cell,
+)
 from .recovery import (
     _recover_distance_failure,
     _recover_z_offset,
@@ -146,11 +151,7 @@ def _finalize_placement(
     slab_indices: tuple[int, ...] | None = None
     if ctx.site is not None:
         slab_indices = ctx.site.slab_indices
-    cell = (
-        pose_cache.cell
-        if pose_cache is not None and pose_cache.cell is not None
-        else np.asarray(slab.get_cell(), dtype=float)
-    )
+    cell = pose_cache_cell(pose_cache, slab)
     placement_xyz = np.array([pose.x_abs, pose.y_abs, z_abs], dtype=float)
     xy_frac = _wrapped_slab_fractional(placement_xyz, cell)[..., :2]
 

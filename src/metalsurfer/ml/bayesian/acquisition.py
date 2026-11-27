@@ -375,20 +375,20 @@ def select_candidates_batch_diverse(
     strength = max(strength, 1e-3)
 
     chosen: list[int] = []
-    remaining = set(available)
+    remaining: list[int] = sorted(available)
     working = s.copy()
     for _ in range(min(batch_size, len(available))):
         if not remaining:
             break
-        cand = np.array(sorted(remaining), dtype=int)
-        vals = working[cand]
+        rem = np.asarray(remaining, dtype=int)
+        vals = working[rem]
         pick_local = int(np.argmax(vals) if higher_is_better else np.argmin(vals))
-        pick = int(cand[pick_local])
+        pick = int(rem[pick_local])
         chosen.append(pick)
-        remaining.remove(pick)
+        remaining.pop(pick_local)
         if not remaining:
             break
-        rem = np.array(sorted(remaining), dtype=int)
+        rem = np.asarray(remaining, dtype=int)
         dists = cdist(scaled[pick : pick + 1], scaled[rem])[0]
         near = np.exp(-0.5 * np.square(dists / lengthscale))
         if higher_is_better:

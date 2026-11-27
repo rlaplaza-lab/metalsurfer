@@ -18,6 +18,7 @@ from metalsurfer.placement.geometry import occupied_neighbor_counts
 from metalsurfer.workflow.composite import assemble_joint_config_groups
 from tests.edge_chemistry_helpers import (
     carboxyl_down,
+    edge_adsorption_config,
     has_hbond_contact,
     p_nearer_au_than_carbons,
 )
@@ -80,10 +81,7 @@ def _joint_groups(snapshot: dict[str, object]) -> list[list[ScreeningResult]]:
     assert len(placements) == joint_pose_pool_size(n_per, n_configs)
     poses = [screening_result(snapshot, pose) for pose in placements]
     slab = frame_atoms(snapshot["slab"])
-    config = AdsorptionConfig(
-        seed=42,
-        device="cpu",
-        slab_relaxation_mode="none",
+    config = edge_adsorption_config(
         num_conformers=4,
         num_placements=len(placements),
         saturation_molecules_per_step=n_per,

@@ -885,9 +885,11 @@ Root: ``results_{surface_type}/`` (see :func:`~metalsurfer.results_dir_for`).
   ``_stepNNN`` suffixes), optional ``vasp_inputs/``, ``run_metadata.json``.
 
 Writers and CSV row builders share path layout via :mod:`metalsurfer.result_paths`
-(``molecule_all_xyz_dir``, ``saturation_xyz_dir``, …). Result-object export
-helpers (``to_row``, ``to_rows``, ``format_completion``, …) live on the typed
-result classes so scripts need not import internal I/O helpers.
+(directory helpers such as ``molecule_all_xyz_dir`` / ``saturation_xyz_dir``,
+plus leaf names such as ``conformer_xyz_name``, ``step_placements_dirname``,
+and ``FINAL_SATURATED_SLAB_XYZ``). Result-object export helpers (``to_row``,
+``to_rows``, ``format_completion``, …) live on the typed result classes so
+scripts need not import internal I/O helpers.
 
 
 Dataset logging and ML

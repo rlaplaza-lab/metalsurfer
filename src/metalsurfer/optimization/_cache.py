@@ -263,7 +263,7 @@ def _get_inflight_autobatcher(
                     cached_max_atoms = int(cache_key[4])
                     allowed_growth = max(
                         growth_atoms,
-                        int(round(cached_max_atoms * growth_fraction)),
+                        round(cached_max_atoms * growth_fraction),
                     )
                     if (
                         cached_max_atoms

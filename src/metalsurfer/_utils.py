@@ -5,8 +5,8 @@ from math import isfinite
 
 import numpy as np
 
-# Cells with |det| below this are treated as degenerate (no usable volume), so
-# periodic distance conventions are disabled rather than producing garbage.
+# |det| below this → no usable volume (PBC distances disabled). Not the
+# surface-prep geometric cutoff (_surfaces._CELL_DET_EPS = 1e-8).
 CELL_DET_EPS: float = 1e-12
 
 

@@ -18,7 +18,13 @@ from ..orientation import (
 )
 from ..site_context import SiteContext, site_context_for_sampling
 from ..site_coords import _slab_outward_normal
-from .context import _HeightInterval, _PlacementContext, _PoseBatchCache
+from .context import (
+    _HeightInterval,
+    _PlacementContext,
+    _PoseBatchCache,
+    pose_cache_cell,
+    pose_cache_positions,
+)
 from .height import (
     _com_floor_on_support_plane,
     _com_height_from_z_fraction,
@@ -192,17 +198,9 @@ def _pose_from_spec(
             positions=pos_for_support,
         )
     else:
-        pos_for_support = (
-            pose_cache.positions
-            if pose_cache is not None and pose_cache.positions is not None
-            else np.asarray(ref_slab.get_positions(), dtype=float)
-        )
+        pos_for_support = pose_cache_positions(pose_cache, ref_slab)
         clear_symbols = list(ref_slab.get_chemical_symbols())
-    cell_arr = (
-        pose_cache.cell
-        if pose_cache is not None and pose_cache.cell is not None
-        else np.asarray(slab.get_cell(), dtype=float)
-    )
+    cell_arr = pose_cache_cell(pose_cache, slab)
     pbc = material_aware_pbc(mat_type)
     oriented = orient_from_spec(
         canonical_pos,

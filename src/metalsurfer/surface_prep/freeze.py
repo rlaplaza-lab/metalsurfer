@@ -11,7 +11,6 @@ from collections import Counter
 import numpy as np
 from ase import Atoms
 from ase.constraints import FixAtoms
-from scipy.spatial import KDTree
 
 from .._numeric_defaults import (
     DEFAULT_FROZEN_SUBSTRATE_DISPLACEMENT_TOL_ANG,
@@ -21,8 +20,8 @@ from .._utils import cell_has_volume
 from ..exceptions import GeometryValidationError
 from ..placement._material import material_aware_pbc, validate_material_type
 from ..placement.site_coords import (
-    _build_periodic_images,
     derive_pore_threshold,
+    periodic_accessibility_tree,
     top_layer_mask_by_normal,
 )
 from ..placement.site_enumeration import get_unified_sites
@@ -131,11 +130,14 @@ def identify_relaxable_surface_indices(
     pbc = np.asarray(material_aware_pbc("porous"), dtype=bool)
     cell = np.asarray(slab.get_cell(), dtype=float)
     if cell_has_volume(cell):
-        margin = float(np.max(np.linalg.norm(cell, axis=1)))
-        query_pts = _build_periodic_images(positions, cell, pbc, margin=margin)
+        max_distance = float(np.max(np.linalg.norm(cell, axis=1)))
+        neighbor_tree = periodic_accessibility_tree(
+            positions, cell, pbc, max_distance=max_distance
+        )
     else:
-        query_pts = positions
-    neighbor_tree = KDTree(query_pts)
+        neighbor_tree = periodic_accessibility_tree(
+            positions, cell, pbc, max_distance=0.0
+        )
     boundary: set[int] = set()
     for site in sites:
         if site.site_type != "pore":
@@ -208,9 +210,9 @@ def compute_frozen_indices(
                 unmatched,
                 sorted(slab_symbol_set),
             )
-        frozen = [i for i, s in enumerate(syms) if s in freeze_symbols]
+        frozen = [i for i, s in enumerate(syms) if s in requested]
         if not frozen:
-            raise ValueError(
+            raise GeometryValidationError(
                 f"freeze_symbols {sorted(requested)!r} matched no atoms on "
                 f"substrate with symbols {sorted(slab_symbol_set)!r}"
             )

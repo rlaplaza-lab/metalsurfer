@@ -11,6 +11,7 @@ import pandas as pd
 from ase import Atoms
 from sklearn.preprocessing import StandardScaler
 
+from .._messages import num_placements_must_be_set
 from ..config import (
     AdsorptionConfig,
     require_transfer_capable_surrogate,
@@ -51,6 +52,7 @@ from .core import _evaluate_placement_batch
 from .shared import (
     MoleculeScreenOutcome,
     PlacementFailureEvent,
+    ScreeningPrepareRequest,
     _finalize_screen_results,
     _prepare_bo_pool_stage,
     _prepare_molecule_screening,
@@ -577,24 +579,26 @@ def process_molecule_bayesian(
         return _outcome([])
 
     ctx, early_failure, reference_smiles = _prepare_molecule_screening(
-        smiles=smiles,
-        molecule_name=molecule_name,
-        slab=slab,
-        calculator=calculator,
-        reference_energies=reference_energies,
-        ts_model=ts_model,
-        config=config,
-        base_slab_for_frozen=base_slab_for_frozen,
-        slab_energy_override=slab_energy_override,
-        symmetry_broken=symmetry_broken,
-        bo_enabled=True,
-        conformers=conformers,
-        conformer_energies=conformer_energies,
-        skip_workload_autotune=skip_workload_autotune,
-        site_context=site_context,
-        surface_type=surface_type,
-        debug_sites_step=debug_sites_step,
-        reference_smiles=reference_smiles,
+        ScreeningPrepareRequest(
+            smiles=smiles,
+            molecule_name=molecule_name,
+            slab=slab,
+            calculator=calculator,
+            reference_energies=reference_energies,
+            ts_model=ts_model,
+            config=config,
+            base_slab_for_frozen=base_slab_for_frozen,
+            slab_energy_override=slab_energy_override,
+            symmetry_broken=symmetry_broken,
+            bo_enabled=True,
+            conformers=conformers,
+            conformer_energies=conformer_energies,
+            skip_workload_autotune=skip_workload_autotune,
+            site_context=site_context,
+            surface_type=surface_type,
+            debug_sites_step=debug_sites_step,
+            reference_smiles=reference_smiles,
+        )
     )
     if ctx is None:
         if early_failure is None:
@@ -616,7 +620,7 @@ def process_molecule_bayesian(
     if config.bo.batch_size is None:
         raise ValueError("config.bo.batch_size must be set for Bayesian screening")
     if config.num_placements is None:
-        raise ValueError("config.num_placements must be set for Bayesian screening")
+        raise ValueError(num_placements_must_be_set("for Bayesian screening"))
     bo_eval_budget = resolved_bo_eval_budget(config)
 
     stage = _prepare_bo_pool_stage(

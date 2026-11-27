@@ -346,7 +346,7 @@ def _enumerate_unified_sites(
     ``batch.vertices`` from the selected plugin before shared post-processing.
     """
     if len(atoms) == 0:
-        raise ValueError("atoms must contain at least one atom")
+        raise GeometryValidationError("atoms must contain at least one atom")
     validate_material_type(material_type)
     plugin = resolve_site_generator(site_generator, material_type)
 

@@ -246,13 +246,16 @@ def format_saturation_completion(
     steps_label
         Label for the step-count line.
     """
-    suffix = results_output_suffix(write_vasp_inputs=write_vasp_inputs)
+    saved = format_results_saved_line(
+        results_dir=results_dir,
+        write_vasp_inputs=write_vasp_inputs,
+    )
     return "\n".join(
         [
             f"{label} complete:",
             f"  {molecules_at_saturation_label}: {n_molecules_at_saturation}",
             f"  {steps_label}: {n_steps}",
             *extra_lines,
-            f"  Results saved to {Path(results_dir).as_posix()}/{suffix}",
+            f"  {saved}",
         ]
     )

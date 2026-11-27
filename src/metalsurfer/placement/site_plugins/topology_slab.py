@@ -142,7 +142,7 @@ class TopologySlabGenerator:
             exp_origin=topology_expanded_origin,
             exp_tri=topology_expanded_tri,
         )
-        has_topology_atop = any(s == "topology_atop" for s in topo_sources)
+        has_topology_atop = "topology_atop" in topo_sources
 
         if len(topo_vertices) > 0:
             (

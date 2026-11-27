@@ -13,7 +13,6 @@ import numpy as np
 from ase import Atoms
 
 from ..config import AdsorptionConfig
-from ..exceptions import DependencyMissingError
 from . import _deps
 
 logger = logging.getLogger(__name__)
@@ -52,11 +51,7 @@ def _resolve_ts_optimizer(name: str) -> Any:
     """Map config string to ``ts.Optimizer`` enum member."""
     ts = _deps.ts
     if ts is None:
-        raise DependencyMissingError(
-            "torch-sim-atomistic",
-            "_resolve_ts_optimizer",
-            "Install with: pip install torch-sim-atomistic",
-        )
+        raise _deps.missing_torch_sim("_resolve_ts_optimizer")
     _map = {
         "fire": ts.Optimizer.fire,
         "lbfgs": ts.Optimizer.lbfgs,

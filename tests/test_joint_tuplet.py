@@ -801,7 +801,7 @@ def test_process_joint_tuplet_bayesian_uses_ctx_conformer_energies(monkeypatch):
     monkeypatch.setattr(
         joint_tuplet_mod,
         "_prepare_molecule_screening",
-        lambda **_k: (ctx, None, _k.get("smiles", "O")),
+        lambda request: (ctx, None, getattr(request, "smiles", "O")),
     )
     monkeypatch.setattr(
         "metalsurfer.workflow.shared.estimate_placement_spec_capacity",
@@ -837,7 +837,7 @@ def test_joint_bo_early_failure_includes_transfer_info(monkeypatch):
     failure = ConformerFailure(reason="could not generate conformers for water")
     monkeypatch.setattr(
         "metalsurfer.workflow.joint_tuplet._prepare_molecule_screening",
-        lambda **_k: (None, failure, "O"),
+        lambda _request: (None, failure, "O"),
     )
     out = process_joint_tuplet_bayesian(
         "O",

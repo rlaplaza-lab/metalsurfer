@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 from itertools import product
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import numpy as np
 import spglib
@@ -38,6 +38,17 @@ _spglib_error_module.OLD_ERROR_HANDLING = False
 _SYMMETRY_PAIR_CHUNK_BYTES = 16 * 1024 * 1024
 # Prefer KDTree orbit matching once catalogs exceed this size.
 _SYMMETRY_KDTREE_MIN_SITES = 32
+
+
+class _SymopKdtreeContext(NamedTuple):
+    """Prebuilt reference cartesian coords and KDTree for one type-block."""
+
+    n: int
+    cart_ref_full: np.ndarray
+    cart_ref: np.ndarray
+    periodic: bool
+    tree: KDTree
+
 
 SymmetryMode = Literal["periodic", "cluster"]
 
@@ -382,8 +393,13 @@ class SymmetryAnalyzer:
                 if len(idx) < 2:
                     continue
                 sub_frac = frac_pts[idx]
+                kdtree_ctx: _SymopKdtreeContext | None = None
+                if len(sub_frac) >= _SYMMETRY_KDTREE_MIN_SITES:
+                    kdtree_ctx = self._symop_kdtree_context(sub_frac, bool(planar))
                 for R, t in frac_ops:
-                    for li, lj in self._symop_match_pairs(sub_frac, R, t, bool(planar)):
+                    for li, lj in self._symop_match_pairs(
+                        sub_frac, R, t, bool(planar), kdtree_ctx=kdtree_ctx
+                    ):
                         merge_pairs.append((int(idx[int(li)]), int(idx[int(lj)])))
 
             components = union_find_cluster(n, merge_pairs)
@@ -391,12 +407,46 @@ class SymmetryAnalyzer:
             self._verify_site_orbits(frac_pts, frac_ops, planar, orbits)
             return self._build_orbit_output(sorted_sites, orbits)
 
+    def _symop_kdtree_context(
+        self, frac_pts: np.ndarray, planar: bool
+    ) -> _SymopKdtreeContext:
+        """Build cartesian reference frames and a KDTree once per type-block."""
+        n = int(len(frac_pts))
+        pbc = self._symmetry_pbc()
+        n_hat = self._slab_normal() if planar else None
+
+        cart_ref_full = frac_to_cart(frac_pts, self._lattice)
+        cart_ref = cart_ref_full
+        if n_hat is not None:
+            cart_ref = cart_ref_full - (cart_ref_full @ n_hat)[..., None] * n_hat
+
+        if np.any(pbc) and cell_has_volume(self._lattice):
+            offsets = self._periodic_image_offsets(pbc)
+            expanded = np.vstack([cart_ref + off for off in offsets])
+            return _SymopKdtreeContext(
+                n=n,
+                cart_ref_full=cart_ref_full,
+                cart_ref=cart_ref,
+                periodic=True,
+                tree=KDTree(expanded),
+            )
+
+        return _SymopKdtreeContext(
+            n=n,
+            cart_ref_full=cart_ref_full,
+            cart_ref=cart_ref,
+            periodic=False,
+            tree=KDTree(cart_ref),
+        )
+
     def _symop_match_pairs(
         self,
         frac_pts: np.ndarray,
         R: np.ndarray,
         t: np.ndarray,
         planar: bool,
+        *,
+        kdtree_ctx: _SymopKdtreeContext | None = None,
     ) -> list[tuple[int, int]]:
         """Local ``(i, j)`` pairs where ``op(site_i)`` lands on ``site_j`` within tol.
 
@@ -408,7 +458,9 @@ class SymmetryAnalyzer:
         if n < 2:
             return []
         if n >= _SYMMETRY_KDTREE_MIN_SITES:
-            return self._symop_match_pairs_kdtree(frac_pts, R, t, planar)
+            return self._symop_match_pairs_kdtree(
+                frac_pts, R, t, planar, kdtree_ctx=kdtree_ctx
+            )
         return self._symop_match_pairs_dense(frac_pts, R, t, planar)
 
     def _periodic_image_offsets(self, pbc: np.ndarray) -> np.ndarray:
@@ -430,27 +482,25 @@ class SymmetryAnalyzer:
         R: np.ndarray,
         t: np.ndarray,
         planar: bool,
+        *,
+        kdtree_ctx: _SymopKdtreeContext | None = None,
     ) -> list[tuple[int, int]]:
         """KDTree matching of transformed sites onto the catalog."""
-        n = int(len(frac_pts))
+        if kdtree_ctx is None:
+            kdtree_ctx = self._symop_kdtree_context(frac_pts, planar)
+        n = kdtree_ctx.n
         tol = float(self.symmetry_tolerance)
-        transformed = self._wrap_frac(frac_pts @ R.T + t)
-        pbc = self._symmetry_pbc()
-        n_hat = self._slab_normal() if planar else None
-
-        cart_ref_full = frac_to_cart(frac_pts, self._lattice)
+        cart_ref_full = kdtree_ctx.cart_ref_full
+        tree = kdtree_ctx.tree
+        transformed = self._wrap_frac(self._apply_frac_symop(frac_pts, R, t))
         cart_query_full = frac_to_cart(transformed, self._lattice)
-        cart_ref = cart_ref_full
         cart_query = cart_query_full
+        n_hat = self._slab_normal() if planar else None
         if n_hat is not None:
-            cart_ref = cart_ref_full - (cart_ref_full @ n_hat)[..., None] * n_hat
             cart_query = cart_query_full - (cart_query_full @ n_hat)[..., None] * n_hat
 
-        if np.any(pbc) and cell_has_volume(self._lattice):
-            offsets = self._periodic_image_offsets(pbc)
-            expanded = np.vstack([cart_ref + off for off in offsets])
-            tree = KDTree(expanded)
-            hits = tree.query_ball_point(cart_query, r=tol)
+        hits = tree.query_ball_point(cart_query, r=tol)
+        if kdtree_ctx.periodic:
             pairs: list[tuple[int, int]] = []
             for i, js in enumerate(hits):
                 seen: set[int] = set()
@@ -464,8 +514,6 @@ class SymmetryAnalyzer:
                         pairs.append((i, j))
             return pairs
 
-        tree = KDTree(cart_ref)
-        hits = tree.query_ball_point(cart_query, r=tol)
         pairs = []
         for i, js in enumerate(hits):
             for j in js:
@@ -490,7 +538,7 @@ class SymmetryAnalyzer:
             return []
         per_col = n * 3 * 8
         chunk = max(1, min(n, _SYMMETRY_PAIR_CHUNK_BYTES // max(per_col, 1)))
-        transformed = self._wrap_frac(frac_pts @ R.T + t)
+        transformed = self._wrap_frac(self._apply_frac_symop(frac_pts, R, t))
         pairs: list[tuple[int, int]] = []
         for i0 in range(0, n, chunk):
             i1 = min(n, i0 + chunk)

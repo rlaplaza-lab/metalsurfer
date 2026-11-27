@@ -37,3 +37,18 @@ def configured_logger(
         logger.handlers = old_handlers
         logger.setLevel(old_level)
         logger.propagate = old_propagate
+
+
+@contextmanager
+def capturing_log_records(
+    logger: str | logging.Logger,
+    *,
+    level: int = logging.INFO,
+    propagate: bool = False,
+):
+    """Isolate *logger* and append emitted records to a list."""
+    sink: list[logging.LogRecord] = []
+    handler = CaptureHandler(sink)
+    log = logging.getLogger(logger) if isinstance(logger, str) else logger
+    with configured_logger(log, level=level, propagate=propagate, handler=handler):
+        yield sink

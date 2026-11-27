@@ -29,6 +29,7 @@ from .placement_fill import (
 from .shared import (
     MoleculeScreenOutcome,
     PlacementFailureEvent,
+    ScreeningPrepareRequest,
     _failure_reason_counts,
     _finalize_screen_results,
     _optimize_and_evaluate_placements,
@@ -114,33 +115,29 @@ def process_molecule(
         seed=config.seed,
     ):
         t_mol_start = time.perf_counter()
-        logger.info(
-            "Processing %s on %s surface (SMILES: %s, seed: %d)",
-            molecule_name,
-            surface_type,
-            smiles,
-            config.seed,
-        )
+        logger.info("Processing molecule (SMILES: %s)", smiles)
 
         ctx, early_failure, reference_smiles = _prepare_molecule_screening(
-            smiles=smiles,
-            molecule_name=molecule_name,
-            slab=slab,
-            calculator=calculator,
-            reference_energies=reference_energies,
-            ts_model=ts_model,
-            config=config,
-            base_slab_for_frozen=base_slab_for_frozen,
-            slab_energy_override=slab_energy_override,
-            symmetry_broken=symmetry_broken,
-            bo_enabled=False,
-            conformers=conformers,
-            conformer_energies=conformer_energies,
-            skip_workload_autotune=skip_workload_autotune,
-            site_context=site_context,
-            surface_type=surface_type,
-            debug_sites_step=debug_sites_step,
-            reference_smiles=reference_smiles,
+            ScreeningPrepareRequest(
+                smiles=smiles,
+                molecule_name=molecule_name,
+                slab=slab,
+                calculator=calculator,
+                reference_energies=reference_energies,
+                ts_model=ts_model,
+                config=config,
+                base_slab_for_frozen=base_slab_for_frozen,
+                slab_energy_override=slab_energy_override,
+                symmetry_broken=symmetry_broken,
+                bo_enabled=False,
+                conformers=conformers,
+                conformer_energies=conformer_energies,
+                skip_workload_autotune=skip_workload_autotune,
+                site_context=site_context,
+                surface_type=surface_type,
+                debug_sites_step=debug_sites_step,
+                reference_smiles=reference_smiles,
+            )
         )
         if ctx is None:
             if early_failure is None:
@@ -235,7 +232,11 @@ def process_molecule(
                 "surface_ref_atoms=%d, freeze_ref_atoms=%d",
                 len(slab.atoms),
                 len(slab_for_sites),
-                len(effective_base_slab_for_frozen or slab.atoms),
+                len(
+                    effective_base_slab_for_frozen
+                    if effective_base_slab_for_frozen is not None
+                    else slab.atoms
+                ),
             )
 
         t0 = time.perf_counter()

@@ -9,7 +9,8 @@ from typing import Any, Literal, NamedTuple
 
 from ase import Atoms
 
-from .._logging import log_context
+from .._logging import log_context, log_prefix_context
+from .._messages import num_placements_must_be_set
 from ..config import AdsorptionConfig
 from ..conformers import create_conformers_from_smiles
 from ..filters import adsorbate_connected_components
@@ -749,28 +750,29 @@ def _saturation_should_stop(
     Empty commit is always terminal. For bound steps, ``best_energy`` is the
     committed winner's (or tuplet's) Ω.
     """
-    if n_committed == 0:
-        logger.info(
-            "%s: slab saturated at step %d (no placements committed)",
-            log_prefix,
-            step,
-        )
-        return True
-    if best_energy >= 0:
-        logger.info(
-            "%s: slab saturated at step %d (Ω >= 0)",
-            log_prefix,
-            step,
-        )
-        return True
-    if config.saturation_max_steps is not None and step >= config.saturation_max_steps:
-        logger.info(
-            "%s: reached max steps (%d)",
-            log_prefix,
-            config.saturation_max_steps,
-        )
-        return True
-    return False
+    with log_prefix_context(log_prefix):
+        if n_committed == 0:
+            logger.info(
+                "slab saturated at step %d (no placements committed)",
+                step,
+            )
+            return True
+        if best_energy >= 0:
+            logger.info(
+                "slab saturated at step %d (Ω >= 0)",
+                step,
+            )
+            return True
+        if (
+            config.saturation_max_steps is not None
+            and step >= config.saturation_max_steps
+        ):
+            logger.info(
+                "reached max steps (%d)",
+                config.saturation_max_steps,
+            )
+            return True
+        return False
 
 
 def _resolve_step_commit(
@@ -1232,7 +1234,7 @@ def _run_multi_molecule_saturation(
     active_molecules = list(active_smiles)
 
     if not active_molecules:
-        logger.error(
+        logger.warning(
             "Multi-mol saturation: no molecules with valid conformers; aborting"
         )
         return MultiMolSaturationRunResult(
@@ -1293,7 +1295,7 @@ def _run_multi_molecule_saturation(
 
         num_placements = step_config.num_placements
         if num_placements is None:
-            raise ValueError("num_placements must be resolved before saturation steps")
+            raise ValueError(num_placements_must_be_set("before saturation steps"))
 
         per_molecule_results: dict[str, list[ScreeningResult]] = {
             mol: [] for mol in active_molecules

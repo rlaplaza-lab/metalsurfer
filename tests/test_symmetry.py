@@ -801,7 +801,6 @@ def test_adaptive_grid_nanoparticle_symmetry_is_fast_and_reduces():
 
     from metalsurfer.placement.site_context import (
         _SITE_CONTEXT_CACHE,
-        _SITE_CONTEXT_CACHE_LOCK,
         resolve_site_context_for_sampling,
     )
     from metalsurfer.placement.site_enumeration import get_unified_sites
@@ -830,8 +829,7 @@ def test_adaptive_grid_nanoparticle_symmetry_is_fast_and_reduces():
         voronoi_probe_radius=1.2,
         voronoi_max_site_distance=3.0,
     )
-    with _SITE_CONTEXT_CACHE_LOCK:
-        _SITE_CONTEXT_CACHE.clear()
+    _SITE_CONTEXT_CACHE.clear()
     t1 = time.perf_counter()
     ctx = resolve_site_context_for_sampling(
         cluster, cfg, symmetry_broken=False, material_type="nanoparticle"

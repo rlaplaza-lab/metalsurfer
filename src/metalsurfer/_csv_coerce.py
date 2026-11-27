@@ -3,8 +3,16 @@
 import json
 from typing import Any
 
+from ._messages import missing_required_column
+
 # Case-insensitive missing tokens after strip; empty string is always missing.
 _MISSING_TOKENS = frozenset({"", "nan", "none", "null", "n/a"})
+_BOOL_TRUE_TOKENS = frozenset({"true", "1", "yes", "y", "t"})
+_BOOL_FALSE_TOKENS = frozenset({"false", "0", "no", "n", "f"})
+
+
+def _normalized_cell_text(value: Any) -> str:
+    return str(value).strip().lower()
 
 
 def is_missing(value: Any) -> bool:
@@ -17,8 +25,7 @@ def is_missing(value: Any) -> bool:
     """
     if value is None:
         return True
-    text = str(value).strip().lower()
-    return text in _MISSING_TOKENS
+    return _normalized_cell_text(value) in _MISSING_TOKENS
 
 
 def int_or_none(value: Any) -> int | None:
@@ -58,7 +65,7 @@ def require_key(row: Any, key: str) -> Any:
         Column name that must be present.
     """
     if key not in row:
-        raise ValueError(f"missing required column {key!r}")
+        raise ValueError(missing_required_column(key))
     return row[key]
 
 
@@ -76,10 +83,10 @@ def parse_bool(value: Any, default: bool = False) -> bool:
         return default
     if isinstance(value, (int, float)):
         return bool(value)
-    text = str(value).strip().lower()
-    if text in {"true", "1", "yes", "y", "t"}:
+    text = _normalized_cell_text(value)
+    if text in _BOOL_TRUE_TOKENS:
         return True
-    if text in {"false", "0", "no", "n", "f"}:
+    if text in _BOOL_FALSE_TOKENS:
         return False
     return default
 

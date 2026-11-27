@@ -1,6 +1,13 @@
 """Shared cache-key serialization helpers for placement modules."""
 
+from __future__ import annotations
+
 import struct
+import threading
+from collections.abc import Hashable
+
+import numpy as np
+from ase import Atoms
 
 
 def _pack_optional_float(value: float | None) -> bytes:
@@ -12,3 +19,48 @@ def _pack_optional_float(value: float | None) -> bytes:
     if value is None:
         return b"\x00" + struct.pack("<d", float("nan"))
     return b"\x01" + struct.pack("<d", float(value))
+
+
+def pack_atoms_geometry_bytes(atoms: Atoms, *, include_pbc: bool = False) -> bytes:
+    """Pack positions, cell, atomic numbers; optionally PBC (byte-stable order)."""
+    parts = [
+        atoms.get_positions().tobytes(),
+        np.asarray(atoms.get_cell()).tobytes(),
+    ]
+    if include_pbc:
+        parts.append(np.asarray(atoms.get_pbc(), dtype=np.uint8).tobytes())
+    parts.append(np.asarray(atoms.get_atomic_numbers(), dtype=np.int32).tobytes())
+    return b"".join(parts)
+
+
+class BoundedFifoCache[T]:
+    """Thread-safe insertion-ordered cache; drops the oldest entry on overflow."""
+
+    def __init__(self, max_entries: int) -> None:
+        if max_entries < 1:
+            raise ValueError(f"max_entries must be >= 1, got {max_entries}")
+        self._max_entries = int(max_entries)
+        self._store: dict[Hashable, T] = {}
+        self._lock = threading.Lock()
+
+    def get(self, key: Hashable) -> T | None:
+        with self._lock:
+            return self._store.get(key)
+
+    def store(self, key: Hashable, value: T) -> T:
+        with self._lock:
+            existing = self._store.get(key)
+            if existing is not None:
+                return existing
+            if len(self._store) >= self._max_entries:
+                self._store.pop(next(iter(self._store)))
+            self._store[key] = value
+            return value
+
+    def clear(self) -> None:
+        with self._lock:
+            self._store.clear()
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._store)

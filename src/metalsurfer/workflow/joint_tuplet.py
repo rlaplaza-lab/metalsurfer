@@ -19,6 +19,7 @@ from typing import Literal
 import numpy as np
 from ase import Atoms
 
+from .._messages import missing_reference_energy, num_placements_must_be_set
 from ..config import AdsorptionConfig
 from ..ml.features import extract_features
 from ..ml.schema import PlacementRecord
@@ -51,6 +52,7 @@ from .composite import (
 )
 from .placement_fill import fill_materialized_placements, materialize_specs
 from .shared import (
+    ScreeningPrepareRequest,
     _build_surface_reference_slab,
     _prepare_bo_pool_stage,
     _prepare_molecule_screening,
@@ -198,8 +200,7 @@ def commit_best_joint_config(
             pressure=pressure,
         )
 
-    ordered = sorted(valid_configs, key=_rank)
-    best_group = list(ordered[0])
+    best_group = list(sorted(valid_configs, key=_rank)[0])
     pool_best = min(
         best_group,
         key=lambda r: (
@@ -346,9 +347,9 @@ def screen_joint_tuplet_homogeneous(
 ) -> JointTupletScreenOutcome:
     """CPU placement + batched joint relaxation for one adsorbate species."""
     if config.num_placements is None:
-        raise ValueError("num_placements must be set")
+        raise ValueError(num_placements_must_be_set())
     if ref_step.get_molecule_energy(molecule_name) is None:
-        raise ValueError(f"missing reference energy for {molecule_name!r}")
+        raise ValueError(missing_reference_energy(molecule_name))
 
     assembly_seed = (
         config.seed if debug_sites_step is None else config.seed + debug_sites_step
@@ -420,7 +421,7 @@ def screen_joint_tuplet_multi(
     n = config.saturation_molecules_per_step
     n_configs = config.num_placements
     if n_configs is None:
-        raise ValueError("num_placements must be set")
+        raise ValueError(num_placements_must_be_set())
 
     compositions = enumerate_tuplet_compositions(active_molecules, n)
     if not compositions:
@@ -734,23 +735,25 @@ def process_joint_tuplet_bayesian(
     pressure = config.saturation_pressure
 
     ctx, early_failure, _ = _prepare_molecule_screening(
-        smiles=smiles,
-        molecule_name=molecule_name,
-        slab=slab,
-        calculator=calculator,
-        reference_energies=reference_energies,
-        ts_model=ts_model,
-        config=config,
-        base_slab_for_frozen=base_slab_for_frozen,
-        slab_energy_override=slab_energy_override,
-        symmetry_broken=symmetry_broken,
-        bo_enabled=True,
-        conformers=conformers,
-        conformer_energies=conformer_energies,
-        skip_workload_autotune=skip_workload_autotune,
-        site_context=site_context,
-        surface_type=surface_type,
-        debug_sites_step=debug_sites_step,
+        ScreeningPrepareRequest(
+            smiles=smiles,
+            molecule_name=molecule_name,
+            slab=slab,
+            calculator=calculator,
+            reference_energies=reference_energies,
+            ts_model=ts_model,
+            config=config,
+            base_slab_for_frozen=base_slab_for_frozen,
+            slab_energy_override=slab_energy_override,
+            symmetry_broken=symmetry_broken,
+            bo_enabled=True,
+            conformers=conformers,
+            conformer_energies=conformer_energies,
+            skip_workload_autotune=skip_workload_autotune,
+            site_context=site_context,
+            surface_type=surface_type,
+            debug_sites_step=debug_sites_step,
+        )
     )
     if ctx is None:
         if early_failure is None:
@@ -779,7 +782,7 @@ def process_joint_tuplet_bayesian(
     if config.bo.initial_random is None or config.bo.batch_size is None:
         raise ValueError("bo.initial_random and bo.batch_size required for joint BO")
     if config.num_placements is None:
-        raise ValueError("num_placements required for joint BO")
+        raise ValueError(num_placements_must_be_set("for joint BO"))
 
     stage = _prepare_bo_pool_stage(
         conformers=conformers,
@@ -824,7 +827,11 @@ def process_joint_tuplet_bayesian(
     rng = bo_exploration_rng(config.seed, len(slab.atoms), molecule=molecule_name)
     transfer_state = _TransferRoundState()
     acq_state = _BOAcquisitionState()
-    base_slab = effective_base_slab_for_frozen or slab.atoms
+    base_slab = (
+        effective_base_slab_for_frozen
+        if effective_base_slab_for_frozen is not None
+        else slab.atoms
+    )
 
     def _record_group(group: Sequence[ScreeningResult]) -> None:
         label = joint_config_ranking_energy(

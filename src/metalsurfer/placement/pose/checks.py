@@ -28,12 +28,13 @@ def _build_slab_distance_scratch(
 ) -> geom._SlabDistanceScratch:
     """Build the invariant slab-side slice used across candidate validations."""
     slab_syms = list(slab.get_chemical_symbols())
+    all_pos = np.asarray(slab.get_positions(), dtype=float)
     if exclude_n is not None:
-        slab_pos = np.asarray(slab.get_positions()[:exclude_n], dtype=float)
+        slab_pos = all_pos[:exclude_n]
         slab_syms = slab_syms[:exclude_n]
-        pre_ads_pos = np.asarray(slab.get_positions()[exclude_n:], dtype=float)
+        pre_ads_pos = all_pos[exclude_n:]
     else:
-        slab_pos = np.asarray(slab.get_positions(), dtype=float)
+        slab_pos = all_pos
         pre_ads_pos = None
     cell = np.asarray(slab.get_cell(), dtype=float)
     pbc = material_aware_pbc(mat_type)

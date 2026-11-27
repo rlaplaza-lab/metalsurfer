@@ -15,7 +15,18 @@ This module must not import any other ``metalsurfer.optimization`` submodule.
 import logging
 from typing import Any
 
+from ..exceptions import DependencyMissingError
+
 logger = logging.getLogger(__name__)
+
+
+def missing_torch_sim(feature: str) -> DependencyMissingError:
+    return DependencyMissingError(
+        "torch-sim-atomistic",
+        feature,
+        "Install with: pip install torch-sim-atomistic",
+    )
+
 
 try:
     import torch as _torch_mod

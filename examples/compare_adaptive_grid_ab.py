@@ -46,7 +46,6 @@ from metalsurfer import (
 from metalsurfer.placement._parallel import resolve_materialize_workers
 from metalsurfer.placement.site_context import (
     _SITE_CONTEXT_CACHE,
-    _SITE_CONTEXT_CACHE_LOCK,
 )
 from metalsurfer.placement.site_enumeration import get_unified_sites
 from metalsurfer.surface_prep import prepare_substrate
@@ -56,8 +55,7 @@ _RU_FCC_LATTICE_CONSTANT = 2.71 * (2.0**0.5)
 
 
 def _clear_site_cache() -> None:
-    with _SITE_CONTEXT_CACHE_LOCK:
-        _SITE_CONTEXT_CACHE.clear()
+    _SITE_CONTEXT_CACHE.clear()
 
 
 def _pt13():

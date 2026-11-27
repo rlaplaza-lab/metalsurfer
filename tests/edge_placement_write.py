@@ -12,7 +12,6 @@ from dataclasses import replace
 import numpy as np
 from ase import Atoms
 
-from metalsurfer.config import AdsorptionConfig
 from metalsurfer.conformers import create_conformers_from_smiles
 from metalsurfer.models import ScreeningResult
 from metalsurfer.placement.generators import _spec_grid_info
@@ -25,6 +24,7 @@ from tests.edge_chemistry_helpers import (
     _PYRIDONE_SMILES,
     au4_tetrahedron,
     cu111_for,
+    edge_adsorption_config,
     materialize_pose_pool,
 )
 from tests.edge_placement_snapshots import (
@@ -63,19 +63,9 @@ def _bare_payload(
     }
 
 
-def _cpu_config(*, num_conformers: int) -> AdsorptionConfig:
-    return AdsorptionConfig(
-        seed=42,
-        device="cpu",
-        slab_relaxation_mode="none",
-        num_conformers=num_conformers,
-        num_placements=_COVERAGE_PLACEMENTS,
-    )
-
-
 def write_all() -> None:
     """Materialize the edge pools once and store them under ``tests/data``."""
-    pme3 = _cpu_config(num_conformers=1)
+    pme3 = edge_adsorption_config(num_conformers=1, num_placements=_COVERAGE_PLACEMENTS)
     cluster = prepare_substrate(
         slab=au4_tetrahedron(),
         config=pme3,
@@ -110,7 +100,9 @@ def write_all() -> None:
         )
         _write(name, _bare_payload(slab=cluster.atoms, poses=poses, info=info))
 
-    slab_config = _cpu_config(num_conformers=4)
+    slab_config = edge_adsorption_config(
+        num_conformers=4, num_placements=_COVERAGE_PLACEMENTS
+    )
     pyridone_slab, pyridone_conformers = cu111_for(
         _PYRIDONE_SMILES,
         slab_config,
@@ -246,7 +238,9 @@ def _write_pyridone_joint_pools(slab: Atoms, conformers: list[Atoms]) -> None:
     ):
         pool = joint_pose_pool_size(n_per, n_configs)
         config = replace(
-            _cpu_config(num_conformers=4),
+            edge_adsorption_config(
+                num_conformers=4, num_placements=_COVERAGE_PLACEMENTS
+            ),
             num_placements=pool,
             saturation_molecules_per_step=n_per,
         )
@@ -275,7 +269,9 @@ def _write_pyridone_joint_pools(slab: Atoms, conformers: list[Atoms]) -> None:
 
 def write_pyridone_joint_pools() -> None:
     """Materialize the pyridone pair and trimer pools without the other edges."""
-    config = _cpu_config(num_conformers=4)
+    config = edge_adsorption_config(
+        num_conformers=4, num_placements=_COVERAGE_PLACEMENTS
+    )
     slab, conformers = cu111_for(
         _PYRIDONE_SMILES,
         config,

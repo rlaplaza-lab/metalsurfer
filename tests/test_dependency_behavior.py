@@ -50,15 +50,31 @@ def _reload_with_missing(module, missing: dict[str, object]):
 # ---------------------------------------------------------------------------
 
 
+@contextmanager
+def _reload_with_missing_rdkit(*modules):
+    """Hide RDKit, reload shared accessor then consumers, then restore."""
+    import metalsurfer._rdkit as rdkit_mod
+
+    missing = {"rdkit": None, "rdkit.Chem": None, "rdkit.Chem.AllChem": None}
+    try:
+        with patch.dict(sys.modules, missing):
+            importlib.reload(rdkit_mod)
+            for module in modules:
+                importlib.reload(module)
+            yield
+    finally:
+        importlib.reload(rdkit_mod)
+        for module in modules:
+            importlib.reload(module)
+
+
 class TestMissingRDKit:
     def test_conformer_generation_raises_clear_error(self):
         """create_conformers_from_smiles must raise DependencyMissingError with install hint."""
         import metalsurfer.conformers as mod
 
         with (
-            _reload_with_missing(
-                mod, {"rdkit": None, "rdkit.Chem": None, "rdkit.Chem.AllChem": None}
-            ),
+            _reload_with_missing_rdkit(mod),
             pytest.raises(DependencyMissingError, match="rdkit"),
         ):
             mod.create_conformers_from_smiles(
@@ -69,7 +85,7 @@ class TestMissingRDKit:
         """RDKit-dependent filter helpers should return None, not crash."""
         import metalsurfer.filters as fmod
 
-        with _reload_with_missing(fmod, {"rdkit": None, "rdkit.Chem": None}):
+        with _reload_with_missing_rdkit(fmod):
             assert fmod._formula_from_smiles("O") is None
             assert fmod._mol_from_smiles("O") is None
 
@@ -77,7 +93,7 @@ class TestMissingRDKit:
         """check_decomposition must raise DependencyMissingError when RDKit missing and reference_smiles provided."""
         import metalsurfer.filters as fmod
 
-        with _reload_with_missing(fmod, {"rdkit": None, "rdkit.Chem": None}):
+        with _reload_with_missing_rdkit(fmod):
             from ase import Atoms
 
             atoms = Atoms("OH2", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]])
@@ -95,7 +111,7 @@ class TestMissingRDKit:
         import metalsurfer.placement.orientation as omod
 
         with (
-            _reload_with_missing(omod, {"rdkit": None, "rdkit.Chem": None}),
+            _reload_with_missing_rdkit(omod),
             pytest.raises(DependencyMissingError, match="rdkit"),
         ):
             omod._is_flat_aromatic_with_en("c1ccccc1O")

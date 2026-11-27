@@ -208,11 +208,7 @@ def setup_torchsim_model(  # pragma: no cover - requires MLIP stack / GPU
     """
     validate_uma_setup(model_name, task_name, dispersion)
     if _deps.ts is None:
-        raise DependencyMissingError(
-            "torch-sim-atomistic",
-            "setup_torchsim_model",
-            "Install with: pip install torch-sim-atomistic",
-        )
+        raise _deps.missing_torch_sim("setup_torchsim_model")
     try:
         from torch_sim.models.fairchem import FairChemModel
     except ImportError as exc:
@@ -375,11 +371,7 @@ class TorchSimCalculator:
             return
         ts = _deps.ts
         if ts is None:
-            raise DependencyMissingError(
-                "torch-sim-atomistic",
-                "TorchSimCalculator.calculate",
-                "Install with: pip install torch-sim-atomistic",
-            )
+            raise _deps.missing_torch_sim("TorchSimCalculator.calculate")
         self.results = {}
         _validate_model_pbc(atoms, context="TorchSimCalculator.calculate")
         properties = properties or ["energy", "forces"]
