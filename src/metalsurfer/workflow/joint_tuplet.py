@@ -200,7 +200,7 @@ def commit_best_joint_config(
             pressure=pressure,
         )
 
-    best_group = list(min(valid_configs, key=_rank))
+    best_group = list(sorted(valid_configs, key=_rank)[0])
     pool_best = min(
         best_group,
         key=lambda r: (

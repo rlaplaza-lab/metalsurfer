@@ -413,18 +413,15 @@ class PlacementDescriptor:
         }
         if placement_index is not None:
             pid = int(placement_index)
+        elif "placement_id" in row and not _row_is_missing(row["placement_id"]):
+            pid = int(row["placement_id"])
+        elif "placement_index" in row and not _row_is_missing(row["placement_index"]):
+            pid = int(row["placement_index"])
         else:
-            placement_id = row.get("placement_id")
-            placement_idx = row.get("placement_index")
-            if not _row_is_missing(placement_id):
-                pid = int(placement_id)
-            elif not _row_is_missing(placement_idx):
-                pid = int(placement_idx)
-            else:
-                raise ValueError(
-                    "PlacementDescriptor.from_row requires placement_index=... "
-                    "or a 'placement_id'/'placement_index' column"
-                )
+            raise ValueError(
+                "PlacementDescriptor.from_row requires placement_index=... "
+                "or a 'placement_id'/'placement_index' column"
+            )
 
         if not _row_has_initial_columns(row):
             values = _lean_placeholder_values()

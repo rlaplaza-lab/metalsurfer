@@ -40,6 +40,7 @@ from .placement.geometry import (
     _mol_slab_pairwise_distances,
     calculate_min_distance,
 )
+from .placement.occupancy import lateral_contact_shell as lateral_contact_shell
 
 logger = logging.getLogger(__name__)
 
