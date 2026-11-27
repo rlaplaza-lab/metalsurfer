@@ -580,6 +580,7 @@ def _feasible_height_interval(
         )
         raw_vdw = _com_height_from_frame(frame, vdw_allowed, apply_anchor_floor=False)
     landing = max(float(vdw_h), float(contact_h) + _WALL_SHELL_MIN_GAP_ANGSTROM)
+    actual_at_nominal: float | None = None
 
     if is_void:
         raw_landing = max(
@@ -607,7 +608,7 @@ def _feasible_height_interval(
         if config.strict_initial_placement:
             upper_targets.append(float(config.max_closest_approach))
         if upper_targets:
-            actual = _pair_min_distance_at_com_height(
+            actual_at_nominal = _pair_min_distance_at_com_height(
                 rotated_pos,
                 site_xyz=base,
                 place_normal=place_normal,
@@ -616,7 +617,7 @@ def _feasible_height_interval(
                 pbc=pbc,
                 com_h=com_nominal,
             )
-            slack = max(0.0, float(min(upper_targets)) - float(actual))
+            slack = max(0.0, float(min(upper_targets)) - float(actual_at_nominal))
             landing = min(landing, com_nominal + slack)
             landing = max(landing, com_nominal)
         com_hi = _com_hi_for_vdw_landing(com_nominal, landing)
@@ -645,14 +646,18 @@ def _feasible_height_interval(
         )
         contact_ok = n_contact >= min_contacts
         if config.strict_initial_placement:
-            actual_nom = _pair_min_distance_at_com_height(
-                rotated_pos,
-                site_xyz=base,
-                place_normal=place_normal,
-                slab_positions=shell_pos,
-                cell=cell,
-                pbc=pbc,
-                com_h=com_nominal,
+            actual_nom = (
+                actual_at_nominal
+                if actual_at_nominal is not None
+                else _pair_min_distance_at_com_height(
+                    rotated_pos,
+                    site_xyz=base,
+                    place_normal=place_normal,
+                    slab_positions=shell_pos,
+                    cell=cell,
+                    pbc=pbc,
+                    com_h=com_nominal,
+                )
             )
             if actual_nom > float(config.max_closest_approach):
                 contact_ok = False

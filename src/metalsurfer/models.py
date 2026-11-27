@@ -1157,6 +1157,11 @@ class MultiMolSaturationStepResult:
         return rows
 
 
+def saturation_molecule_label(molecules: Sequence[str]) -> str:
+    """Stable directory/CSV label for a multi-molecule saturation run."""
+    return "_".join(molecules)
+
+
 @dataclass
 class MultiMolSaturationRunResult:
     """Full multi-molecule saturation run: molecules compete at each step.
@@ -1178,7 +1183,7 @@ class MultiMolSaturationRunResult:
 
     def to_flattened_runs(self) -> list[ScreeningRunResult]:
         """Flatten all saturation steps into screening-like run results."""
-        label = "_".join(self.molecules)
+        label = saturation_molecule_label(self.molecules)
         flattened_runs: list[ScreeningRunResult] = []
         for step_result in self.steps:
             step_name = f"{label}_step_{step_result.step:03d}"
@@ -1197,7 +1202,7 @@ def _saturation_run_breakdown_line(
     run: SaturationRunResult | MultiMolSaturationRunResult,
 ) -> str:
     if isinstance(run, MultiMolSaturationRunResult):
-        name = "_".join(run.molecules)
+        name = saturation_molecule_label(run.molecules)
         counts = f"; counts={run.molecule_counts}" if run.molecule_counts else ""
         return (
             f"  {name}: {run.n_molecules_at_saturation} molecule(s) at saturation "

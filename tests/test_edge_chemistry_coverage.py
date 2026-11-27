@@ -12,9 +12,10 @@ import numpy as np
 import pytest
 
 from metalsurfer.config import AdsorptionConfig
-from metalsurfer.filters import lateral_contact_shell, min_interadsorbate_covalent_ratio
+from metalsurfer.filters import min_interadsorbate_covalent_ratio
 from metalsurfer.models import ScreeningResult
 from metalsurfer.placement.geometry import occupied_neighbor_counts
+from metalsurfer.placement.occupancy import lateral_contact_shell
 from metalsurfer.workflow.composite import assemble_joint_config_groups
 from tests.edge_chemistry_helpers import (
     carboxyl_down,
@@ -92,7 +93,6 @@ def _joint_groups(snapshot: dict[str, object]) -> list[list[ScreeningResult]]:
         n_configs=n_configs,
         slab_atoms=slab,
         config=config,
-        rng=np.random.default_rng(config.seed),
         n_substrate=len(slab),
         site_positions=_catalog_positions(snapshot),
         material_type="slab",

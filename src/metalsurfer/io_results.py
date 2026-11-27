@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 from ase import Atoms
 
+from ._messages import UNREADABLE_EXISTING_FILE_WARNING
 from .config import AdsorptionConfig
 from .ml.schema import SCHEMA_VERSION, config_to_context_row
 from .models import (
@@ -25,6 +26,7 @@ from .models import (
     ScreeningRunResult,
     _saturation_step_structure_paths,
     build_molecule_summary,
+    saturation_molecule_label,
 )
 from .result_paths import (
     ADSORPTION_ENERGIES_DETAILED_CSV,
@@ -46,6 +48,11 @@ from .result_paths import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _warn_unreadable_existing(path: Path, exc: BaseException) -> None:
+    """Warn that an existing results file could not be read and will be replaced."""
+    logger.warning(UNREADABLE_EXISTING_FILE_WARNING, path.name, exc)
 
 
 def _build_run_metadata(
@@ -95,11 +102,7 @@ def _write_run_metadata_file(results_dir: Path, metadata: dict[str, Any]) -> Pat
             with path.open() as f:
                 existing = json.load(f)
         except (OSError, json.JSONDecodeError) as exc:
-            logger.warning(
-                "Could not read existing %s (%s); it will be replaced",
-                path.name,
-                exc,
-            )
+            _warn_unreadable_existing(path, exc)
             existing = None
     merged = _merge_run_metadata(existing, metadata)
     with path.open("w") as f:
@@ -369,9 +372,7 @@ def _merge_preserving_existing_molecules(
     try:
         existing = pd.read_csv(path)
     except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError) as exc:
-        logger.warning(
-            "Could not read existing %s (%s); it will be replaced", path.name, exc
-        )
+        _warn_unreadable_existing(path, exc)
         return new_df
     if key_col not in new_df.columns:
         return new_df
@@ -930,7 +931,7 @@ def save_multi_mol_saturation_results(
     material_type
         ``"slab"``, ``"nanoparticle"``, or ``"porous"``.
     """
-    mol_label = _saturation_molecule_label(result.molecules)
+    mol_label = saturation_molecule_label(result.molecules)
     _persist_saturation_run(
         surface_type=surface_type,
         config=config,
@@ -1152,8 +1153,7 @@ def _write_debug_site_overlays(
     _write_site_overlay_xyz(slab, final_xyz, out / f"sites_final{suffix}.xyz")
 
 
-def _saturation_molecule_label(molecules: Sequence[str]) -> str:
-    return "_".join(molecules)
+_saturation_molecule_label = saturation_molecule_label
 
 
 def _write_saturation_step_xyz(best: ScreeningResult, mol_dir: str, step: int) -> None:

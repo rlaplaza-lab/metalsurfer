@@ -7,7 +7,7 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from dataclasses import fields as dataclass_fields
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 
@@ -52,6 +52,7 @@ from ..models import (
     _require_row_value,
 )
 from ..placement.geometry import normalize_quaternion
+from ..reporting import FailureStage
 
 SCHEMA_VERSION = "3.2"
 
@@ -410,7 +411,7 @@ class PlacementRecord:
     # --- Post-optimization metadata ---
     distance: float = 0.0
     converged: bool = True
-    failure_stage: str | None = None
+    failure_stage: FailureStage | None = None
     failure_reason: str | None = None
     is_penalty_label: bool = False
     label_source: str = "observed"
@@ -783,7 +784,7 @@ class PlacementRecord:
             distance=float(_require_row_value(row, "distance")),
             converged=_parse_bool(converged_raw, default=True),
             failure_stage=(
-                str(row["failure_stage"])
+                cast(FailureStage, str(row["failure_stage"]))
                 if "failure_stage" in row and not _is_missing(row.get("failure_stage"))
                 else None
             ),

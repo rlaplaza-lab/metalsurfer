@@ -1778,6 +1778,70 @@ def test_estimate_parallel_relaxation_capacity_runtime_error_falls_back(
     assert _cache.capacity_cache_get(cache_key) is None
 
 
+def test_estimate_parallel_relaxation_capacity_invalid_metric_raises(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Invalid probe metrics must not soft-fall back to serial capacity."""
+    from metalsurfer.exceptions import OptimizationError
+
+    _cache._PARALLEL_CAPACITY_CACHE.clear()
+    monkeypatch.setattr(_deps, "ts", object())
+    monkeypatch.setattr(_deps, "ts_constraints", object())
+    monkeypatch.setattr(
+        _optimize,
+        "_make_state_with_frozen_constraint",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        _deps,
+        "calculate_memory_scalers",
+        lambda *args, **kwargs: [0.0],
+    )
+    config = AdsorptionConfig(autobatcher_max_memory_scaler=1200.0)
+    atoms = _make_atoms_with_cell()
+    with pytest.raises(OptimizationError, match="Invalid memory scaler metric"):
+        _optimize.estimate_parallel_relaxation_capacity(
+            ts_model=object(),
+            representative_atoms=atoms,
+            config=config,
+            frozen_indices=[],
+        )
+
+
+def test_estimate_parallel_relaxation_capacity_batch_size_probe_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """OOM in determine_max_batch_size keeps single-system capacity with scaler."""
+    _cache._PARALLEL_CAPACITY_CACHE.clear()
+    monkeypatch.setattr(_deps, "ts", object())
+    monkeypatch.setattr(_deps, "ts_constraints", object())
+    monkeypatch.setattr(
+        _optimize,
+        "_make_state_with_frozen_constraint",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        _deps,
+        "calculate_memory_scalers",
+        lambda *args, **kwargs: [100.0],
+    )
+    monkeypatch.setattr(
+        _deps,
+        "determine_max_batch_size",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("oom")),
+    )
+    config = AdsorptionConfig()
+    atoms = _make_atoms_with_cell()
+    capacity = _optimize.estimate_parallel_relaxation_capacity(
+        ts_model=object(),
+        representative_atoms=atoms,
+        config=config,
+        frozen_indices=[],
+    )
+    assert capacity.n_systems == 1
+    assert capacity.max_memory_scaler == float(len(atoms))
+
+
 def test_estimate_parallel_relaxation_capacity_value_error_propagates(
     monkeypatch: pytest.MonkeyPatch,
 ):

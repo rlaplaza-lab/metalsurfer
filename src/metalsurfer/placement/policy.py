@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
 from .._logging import warn_once
-from .._numeric_defaults import K_B_EV_PER_K
+from .._numeric_defaults import DEFAULT_BOLTZMANN_TEMPERATURE_K, K_B_EV_PER_K
 from ..models import PlacementSpec
 from ._constants import (
     _AZIMUTH,
@@ -764,7 +764,7 @@ def resolve_conformer_weights(
     n_conformers: int,
     conformer_energies: list[float] | None,
     conformer_weighting: str = "uniform",
-    boltzmann_temperature: float = 300.0,
+    boltzmann_temperature: float = DEFAULT_BOLTZMANN_TEMPERATURE_K,
 ) -> list[float] | None:
     """Resolve the per-conformer prior, or ``None`` for the uniform draw.
 
@@ -1181,7 +1181,7 @@ def build_batch_placement_specs(
     site_index_weight: float = 0.0,
     conformer_energies: list[float] | None = None,
     conformer_weighting: str = "uniform",
-    boltzmann_temperature: float = 300.0,
+    boltzmann_temperature: float = DEFAULT_BOLTZMANN_TEMPERATURE_K,
     site_is_void_for_index: Callable[[int], bool] | None = None,
     site_bin_for_index: Callable[[int], str] | None = None,
     site_clearance_for_index: Callable[[int], float] | None = None,

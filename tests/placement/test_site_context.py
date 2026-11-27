@@ -260,10 +260,8 @@ def test_site_context_cache_key_includes_species_and_symmetry_tol():
 
 
 def test_site_context_cache_key_float_packing_no_collision():
-    from metalsurfer.placement.site_context import (
-        _pack_optional_float,
-        _unique_sites_cache_key,
-    )
+    from metalsurfer.placement._cache_key import _pack_optional_float
+    from metalsurfer.placement.site_context import _unique_sites_cache_key
 
     # Naive str concat collides for these triples; structured packing must not.
     assert f"{1.5}{20.0}{0.5}" == f"{1.52}{0.0}{0.5}"

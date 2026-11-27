@@ -217,8 +217,6 @@ class SymmetryAnalyzer:
         back on partner sites; site–site deltas still use
         :meth:`_symmetry_pbc` (no MIC) so unrelated antipodes are not merged.
         """
-        if self._mode == "periodic":
-            return wrap_fractional(frac, self._symmetry_pbc())
         return wrap_fractional(frac, np.array([True, True, True], dtype=bool))
 
     def _apply_frac_symop(
@@ -323,8 +321,9 @@ class SymmetryAnalyzer:
         return np.asarray(site.xyz, dtype=float).reshape(3).copy()
 
     def _site_sort_key(self, site: Site) -> tuple[float, float, float, str]:
-        xy = site.xy
-        return (float(xy[0]), float(xy[1]), float(site.z), str(site.site_type))
+        from .placement.site_types import site_sort_key
+
+        return site_sort_key(site)
 
     def _build_orbit_output(
         self,

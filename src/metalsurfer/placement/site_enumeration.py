@@ -7,6 +7,7 @@ import numpy as np
 from ase import Atoms
 from scipy.spatial import Delaunay
 
+from .._messages import no_accessible_sites_message
 from .._numeric_defaults import DEFAULT_N_JOBS
 from .._utils import cell_has_volume
 from ..exceptions import GeometryValidationError
@@ -68,14 +69,12 @@ from .site_plugins.helpers import (
 from .site_plugins.helpers import (
     top_layer_is_planar_from_arrays as _top_layer_is_planar_from_arrays,
 )
-from .site_types import Site
+from .site_types import Site, site_sort_key
 from .site_voronoi import (
     _build_delaunay_classification_index,
 )
 
 logger = logging.getLogger(__name__)
-
-_EMPTY_ATOM_INDICES: tuple[int, ...] = ()
 
 
 def _delaunay_classify_inputs(
@@ -436,12 +435,13 @@ def _enumerate_unified_sites(
 
     if len(vertices) == 0:
         logger.warning(
-            "No accessible sites for %d-atom "
-            "structure (probe_radius=%s, max_distance=%s, material_type=%r)",
-            len(atoms),
-            f"{probe_radius:.2f}" if probe_radius is not None else "auto",
-            f"{max_site_distance:.2f}" if max_site_distance is not None else "auto",
-            material_type,
+            "%s",
+            no_accessible_sites_message(
+                len(atoms),
+                probe_radius=probe_radius,
+                max_distance=max_site_distance,
+                material_type=material_type,
+            ),
         )
         return [], plugin_vertices
 
@@ -652,16 +652,7 @@ def _cluster_equivalent_sites(
     def _get_xyz(s: Site) -> np.ndarray:
         return np.asarray(s.xyz, dtype=float)
 
-    def _sort_key(s: Site) -> tuple:
-        xyz = _get_xyz(s)
-        return (
-            float(xyz[0]),
-            float(xyz[1]),
-            float(xyz[2]),
-            str(s.site_type),
-        )
-
-    order = sorted(range(n), key=lambda i: _sort_key(sites[i]))
+    order = sorted(range(n), key=lambda i: site_sort_key(sites[i]))
     sorted_sites = [sites[i] for i in order]
     fps = [_env_fingerprint(s) for s in sorted_sites]
     coords = np.array([_get_xyz(s) for s in sorted_sites])
@@ -675,7 +666,7 @@ def _cluster_equivalent_sites(
             kdtree_radius=tolerance,
         )
         result = [sorted_sites[i] for i in reps]
-        return sorted(result, key=_sort_key)
+        return sorted(result, key=site_sort_key)
 
     if n_periodic == 3:
         image_offsets = _periodic_image_offsets(cell, pbc, tolerance)

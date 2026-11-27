@@ -5,6 +5,7 @@ import io
 import logging
 import os
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from typing import Any, TypeGuard
@@ -46,6 +47,7 @@ def log_context(**kwargs: Any):
 
 
 _warned_once: set[str] = set()
+_warned_once_lock = threading.Lock()
 
 
 def warn_once(
@@ -63,9 +65,11 @@ def warn_once(
         Warning message text (printf-style; extra *args*/*kwargs* go to
         ``logger.warning``).
     """
-    if key not in _warned_once:
+    with _warned_once_lock:
+        if key in _warned_once:
+            return
         _warned_once.add(key)
-        logger.warning(message, *args, **kwargs)
+    logger.warning(message, *args, **kwargs)
 
 
 def _format_ctx_prefix(ctx: dict[str, Any]) -> str:
@@ -308,25 +312,33 @@ def configure_logging(
     force_stdout = os.getenv("METALSURFER_FORCE_STDOUT_LOGS", "") == "1"
     target_stream = sys.stdout if (force_stdout or not running_pytest) else sys.stderr
 
-    root.setLevel(_parse_level(level_name, root.level))
+    resolved_level = _parse_level(level_name, logging.INFO)
+    root.setLevel(resolved_level)
 
     # Avoid touching stream handlers under pytest unless explicitly forced.
     if not (running_pytest and not force_stdout):
         stream_handler_found = False
         if not root.handlers:
             logging.basicConfig(
-                level=_parse_level(level_name, logging.INFO),
+                level=resolved_level,
                 format=fmt,
                 datefmt=datefmt,
                 stream=target_stream,
             )
             stream_handler_found = True
         else:
-            for handler in root.handlers:
-                if _is_console_stream_handler(handler):
-                    handler.setStream(target_stream)
-                    handler.setFormatter(formatter)
-                    stream_handler_found = True
+            console_handlers = [
+                handler
+                for handler in list(root.handlers)
+                if _is_console_stream_handler(handler)
+            ]
+            if console_handlers:
+                primary = console_handlers[0]
+                primary.setStream(target_stream)
+                primary.setFormatter(formatter)
+                for duplicate in console_handlers[1:]:
+                    root.removeHandler(duplicate)
+                stream_handler_found = True
 
         if not stream_handler_found:
             sh = logging.StreamHandler(target_stream)

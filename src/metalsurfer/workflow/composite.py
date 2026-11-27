@@ -650,7 +650,6 @@ def assemble_joint_config_groups(
     n_configs: int,
     slab_atoms: Atoms,
     config: AdsorptionConfig,
-    rng: np.random.Generator,
     material_type: str,
     n_substrate: int | None = None,
     site_positions: Mapping[int, np.ndarray] | None = None,
@@ -665,7 +664,6 @@ def assemble_joint_config_groups(
     hard clash. Poses are consumed across groups, and the count round-robin
     continues from one group to the next.
     """
-    del rng
     if n_per_config <= 0 or n_configs <= 0 or not poses:
         return []
     positions = (
@@ -718,7 +716,6 @@ def assemble_quota_joint_configs(
     n_configs: int,
     slab_atoms: Atoms,
     config: AdsorptionConfig,
-    rng: np.random.Generator,
     material_type: str,
     n_substrate: int | None = None,
     site_positions: Mapping[int, np.ndarray] | None = None,
@@ -739,13 +736,11 @@ def assemble_quota_joint_configs(
             n_configs=n_configs,
             slab_atoms=slab_atoms,
             config=config,
-            rng=rng,
             material_type=material_type,
             n_substrate=n_substrate,
             site_positions=site_positions,
             site_types=site_types,
         )
-    del rng
     remaining: dict[str, list[ScreeningResult]] = {
         mol: list(pools.get(mol, [])) for mol in quotas
     }

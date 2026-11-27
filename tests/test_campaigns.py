@@ -396,7 +396,7 @@ def test_run_adsorption_skip_existing_inline_list(workdir, monkeypatch):
     assert captured["count"] == 1
 
 
-def test_run_adsorption_warns_when_all_skipped(workdir):
+def test_run_adsorption_warns_when_all_skipped(workdir, caplog):
     surface_type = "skip_all"
     results_dir = workdir / f"results_{surface_type}"
     results_dir.mkdir()
@@ -404,7 +404,7 @@ def test_run_adsorption_warns_when_all_skipped(workdir):
         "molecule,energy_adsorption\nwater,-1.0\n",
         encoding="utf-8",
     )
-    with pytest.warns(UserWarning, match="adsorption_energies_detailed"):
+    with caplog.at_level(logging.WARNING, logger="metalsurfer.campaigns"):
         campaign = run_adsorption(
             substrate=_dummy_substrate(),
             molecules=[("O", "water")],
@@ -414,6 +414,10 @@ def test_run_adsorption_warns_when_all_skipped(workdir):
             save_results=False,
             write_settings=False,
         )
+    assert any(
+        "adsorption_energies_detailed" in record.getMessage()
+        for record in caplog.records
+    )
     assert campaign.n_molecules == 0
     assert "No molecules processed" in campaign.format_summary(
         results_dir=f"results_{surface_type}"
@@ -501,10 +505,10 @@ def test_run_saturation_logs_when_all_skipped(workdir, monkeypatch, caplog):
     )
 
 
-def test_run_adsorption_warns_when_input_empty(workdir):
+def test_run_adsorption_warns_when_input_empty(workdir, caplog):
     csv_path = workdir / "empty.csv"
     csv_path.write_text("smiles,name\n", encoding="utf-8")
-    with pytest.warns(UserWarning, match="no valid rows"):
+    with caplog.at_level(logging.WARNING, logger="metalsurfer.campaigns"):
         campaign = run_adsorption(
             substrate=_dummy_substrate(),
             molecules=str(csv_path),
@@ -514,6 +518,7 @@ def test_run_adsorption_warns_when_input_empty(workdir):
             save_results=False,
             write_settings=False,
         )
+    assert any("no valid rows" in record.getMessage() for record in caplog.records)
     assert campaign.n_molecules == 0
 
 

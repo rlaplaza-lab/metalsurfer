@@ -8,12 +8,13 @@ from dataclasses import dataclass
 import numpy as np
 from ase import Atoms
 
+from .._messages import no_accessible_sites_message
 from ..config import AdsorptionConfig
 from ..symmetry import SymmetryAnalysisError
 from ._cache_key import (
     BoundedFifoCache,
-    _pack_optional_float,
     pack_atoms_geometry_bytes,
+    pack_voronoi_site_config_bytes,
 )
 from ._material import material_aware_pbc, validate_material_type
 from .site_enumeration import (
@@ -88,20 +89,7 @@ def _unique_sites_cache_key(
     for wall-near plugins are part of the key when those generators are selected.
     """
     geometry_bytes = pack_atoms_geometry_bytes(slab, include_pbc=True)
-    cfg_bytes = (
-        _pack_optional_float(config.voronoi_probe_radius)
-        + _pack_optional_float(config.voronoi_max_site_distance)
-        + _pack_optional_float(config.top_layer_tolerance)
-        + struct.pack("<d", float(config.planar_z_variance_threshold))
-        + struct.pack("<d", float(config.site_equivalence_tolerance))
-        + struct.pack("<?", bool(config.voronoi_site_enrichment))
-        + struct.pack("<?", bool(config.voronoi_auto_widen))
-        + str(config.site_classification_method).encode()
-        + b"\x00"
-        + str(config.site_generator).encode()
-        + b"\x00"
-        + material_type.encode()
-    )
+    cfg_bytes = pack_voronoi_site_config_bytes(config, material_type)
     scale_bytes = b""
     if str(config.site_generator) == "adaptive_grid":
         scale_bytes = (
@@ -419,12 +407,14 @@ def _get_unique_sites_for_specs(
     )
     if not raw_sites:
         logger.warning(
-            "Unified site detection found no sites for %d-atom structure "
-            "(probe_radius=%s, max_distance=%s, material_type=%r)",
-            len(slab),
-            f"{probe_radius:.2f}" if probe_radius is not None else "auto",
-            f"{max_site_dist:.2f}" if max_site_dist is not None else "auto",
-            mat_type,
+            "%s",
+            no_accessible_sites_message(
+                len(slab),
+                probe_radius=probe_radius,
+                max_distance=max_site_dist,
+                material_type=mat_type,
+                unified=True,
+            ),
         )
         return _store_site_context_cache(
             cache_key,

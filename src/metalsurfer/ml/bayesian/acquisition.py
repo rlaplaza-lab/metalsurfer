@@ -31,6 +31,40 @@ from .types import AcquisitionType, InitialSamplingType
 logger = logging.getLogger(__name__)
 
 
+def _as_feature_matrix(features: pd.DataFrame | np.ndarray) -> np.ndarray:
+    """Coerce a feature table or array to a 2-D float matrix."""
+    if isinstance(features, pd.DataFrame):
+        return features.to_numpy(dtype=float)
+    return np.asarray(features, dtype=float)
+
+
+def _as_scaled_matrix(
+    features: pd.DataFrame | np.ndarray,
+    scaled_features: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(raw_matrix, scaled_matrix)``, fitting a scaler when needed."""
+    matrix = _as_feature_matrix(features)
+    n_pool = matrix.shape[0]
+    if scaled_features is not None:
+        scaled = np.asarray(scaled_features, dtype=float)
+        if scaled.shape[0] != n_pool:
+            raise ValueError(
+                f"scaled_features rows ({scaled.shape[0]}) must match pool ({n_pool})"
+            )
+        return matrix, scaled
+    return matrix, StandardScaler().fit_transform(matrix)
+
+
+def _finite_sigma_z(numer: np.ndarray, sigma: np.ndarray) -> np.ndarray:
+    """``numer / sigma`` where sigma is above the acquisition floor; else 0."""
+    return np.divide(
+        numer,
+        sigma,
+        out=np.zeros_like(numer, dtype=float),
+        where=sigma > ACQUISITION_SIGMA_FLOOR,
+    )
+
+
 def lcb_scores(
     mu: np.ndarray,
     sigma: np.ndarray,
@@ -83,12 +117,7 @@ def ei_scores(
     finite = sigma > ACQUISITION_SIGMA_FLOOR
     if not np.any(finite):
         return -mu
-    z = np.divide(
-        imp,
-        sigma,
-        out=np.zeros_like(imp, dtype=float),
-        where=finite,
-    )
+    z = _finite_sigma_z(imp, sigma)
     ei = imp * stats.norm.cdf(z) + sigma * stats.norm.pdf(z)
     return np.where(finite, ei, np.maximum(imp, 0.0))
 
@@ -121,15 +150,10 @@ def pi_scores(
     finite = sigma > ACQUISITION_SIGMA_FLOOR
     if not np.any(finite):
         return -mu
-    z = np.divide(
-        f_best - xi - mu,
-        sigma,
-        out=np.zeros_like(mu, dtype=float),
-        where=finite,
-    )
+    z = _finite_sigma_z(f_best - xi - mu, sigma)
     pi = stats.norm.cdf(z)
     degenerate = np.where(mu < f_best - xi, 1.0, 0.0)
-    return np.clip(np.where(finite, pi, degenerate), 0.0, 1.0)
+    return np.where(finite, pi, degenerate)
 
 
 def _farthest_point_indices(
@@ -140,22 +164,10 @@ def _farthest_point_indices(
     scaled_features: np.ndarray | None = None,
 ) -> list[int]:
     """Greedy farthest-point sampling in standardized feature space."""
-    matrix = (
-        features.to_numpy(dtype=float)
-        if isinstance(features, pd.DataFrame)
-        else np.asarray(features, dtype=float)
-    )
+    matrix, scaled = _as_scaled_matrix(features, scaled_features)
     n_pool = matrix.shape[0]
     if n_pick >= n_pool:
         return list(range(n_pool))
-    if scaled_features is not None:
-        scaled = np.asarray(scaled_features, dtype=float)
-        if scaled.shape[0] != n_pool:
-            raise ValueError(
-                f"scaled_features rows ({scaled.shape[0]}) must match pool ({n_pool})"
-            )
-    else:
-        scaled = StandardScaler().fit_transform(matrix)
     first = int(rng.randint(n_pool))
     chosen = [first]
     min_dists = np.linalg.norm(scaled - scaled[first], axis=1)
@@ -338,12 +350,8 @@ def select_candidates_batch_diverse(
         Optional pre-standardized feature matrix (same row order as *features*).
         When provided, skips re-fitting ``StandardScaler`` every acquisition round.
     """
-    s = np.asarray(scores, dtype=float).copy().ravel()
-    matrix = (
-        features.to_numpy(dtype=float)
-        if isinstance(features, pd.DataFrame)
-        else np.asarray(features, dtype=float)
-    )
+    s = np.asarray(scores, dtype=float).ravel()
+    matrix, scaled = _as_scaled_matrix(features, scaled_features)
     n = len(s)
     if matrix.shape[0] != n:
         raise ValueError(
@@ -361,14 +369,6 @@ def select_candidates_batch_diverse(
             higher_is_better=higher_is_better,
         )
 
-    if scaled_features is not None:
-        scaled = np.asarray(scaled_features, dtype=float)
-        if scaled.shape[0] != n:
-            raise ValueError(
-                f"scaled_features rows ({scaled.shape[0]}) must match scores length ({n})"
-            )
-    else:
-        scaled = StandardScaler().fit_transform(matrix)
     lengthscale = _median_nn_lengthscale(scaled[available], use_kdtree=True)
     finite = s[np.isfinite(s)]
     strength = float(np.std(finite)) if finite.size > 1 else 1.0

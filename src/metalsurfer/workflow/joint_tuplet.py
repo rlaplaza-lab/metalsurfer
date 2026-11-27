@@ -342,7 +342,6 @@ def screen_joint_tuplet_homogeneous(
     conformer_energies: list[float] | None,
     site_context: SiteContext | None,
     topology_check: TopologyCheck | None = None,
-    debug_sites_step: int | None = None,
     log_prefix: str = "",
 ) -> JointTupletScreenOutcome:
     """CPU placement + batched joint relaxation for one adsorbate species."""
@@ -351,9 +350,6 @@ def screen_joint_tuplet_homogeneous(
     if ref_step.get_molecule_energy(molecule_name) is None:
         raise ValueError(missing_reference_energy(molecule_name))
 
-    assembly_seed = (
-        config.seed if debug_sites_step is None else config.seed + debug_sites_step
-    )
     return screen_joint_tuplet_multi(
         active_molecules=[molecule_name],
         active_smiles={molecule_name: smiles},
@@ -369,7 +365,6 @@ def screen_joint_tuplet_homogeneous(
         symmetry_broken=symmetry_broken,
         topology_check=topology_check,
         log_prefix=log_prefix,
-        assembly_seed=assembly_seed,
         empty_pool_failure=True,
         assemble="exact",
     )
@@ -391,7 +386,6 @@ def screen_joint_tuplet_multi(
     symmetry_broken: bool = False,
     topology_check: TopologyCheck | None = None,
     log_prefix: str = "",
-    assembly_seed: int | None = None,
     empty_pool_failure: bool = False,
     assemble: Literal["quota", "exact"] = "quota",
 ) -> JointTupletScreenOutcome:
@@ -476,9 +470,6 @@ def screen_joint_tuplet_multi(
             slots_by_molecule=dict(slots_by_mol),
         )
 
-    seed = config.seed if assembly_seed is None else assembly_seed
-    rng = np.random.default_rng(seed)
-
     if assemble == "exact":
         if len(active_molecules) != 1:
             raise ValueError(
@@ -494,7 +485,6 @@ def screen_joint_tuplet_multi(
             n_configs=n_configs,
             slab_atoms=current_slab.atoms,
             config=config,
-            rng=rng,
             material_type=current_slab.material_type,
             n_substrate=len(base_slab),
             site_positions=positions,
@@ -519,7 +509,6 @@ def screen_joint_tuplet_multi(
                     n_configs=n_share,
                     slab_atoms=current_slab.atoms,
                     config=config,
-                    rng=rng,
                     material_type=current_slab.material_type,
                     n_substrate=len(base_slab),
                     site_positions=positions,

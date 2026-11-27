@@ -4,11 +4,10 @@ Core types and helpers (config, models, exceptions, logging) are imported
 eagerly on purpose.
 """
 
-__version__ = "0.10.0"
-
 import importlib
 
 from ._logging import configure_logging
+from ._version import __version__
 from .config import (
     AdsorptionConfig,
     BOConfig,

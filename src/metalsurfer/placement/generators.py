@@ -766,28 +766,22 @@ def _enumerate_reserved_substrate_and_ligand(
         if n <= 0 or not indices:
             return []
         specs = policy.build_batch_placement_specs(
-            n_conformers=n_conformers,
-            site_indices=list(indices),
-            site_type_for_index=lambda site_idx: _site_type_for_grid(info, site_idx),
-            shape=info.shape,
-            n_binders=info.n_binders,
-            flat_aromatic=info.flat_aromatic,
-            parallel_fraction=parallel_fraction,
-            n_desired=n,
-            filter_spec=filter_spec,
-            dissociative=False,
-            n_hollow_pairs=0,
-            seed=draw_seed,
-            preferred_site_types=preferred,
-            site_index_weight=(_POROUS_SITE_INDEX_WEIGHT if prefer_pores else 0.0),
-            conformer_energies=conformer_energies,
-            conformer_weighting=conformer_weighting,
-            boltzmann_temperature=boltzmann_temperature,
-            site_is_void_for_index=lambda site_idx: _site_is_void_for_grid(
-                info, site_idx
-            ),
-            site_bin_for_index=lambda site_idx: _site_bin_for_grid(info, site_idx),
-            site_clearance_for_index=_clearance_for_grid(info),
+            **_grid_batch_kwargs(
+                info,
+                n_conformers=n_conformers,
+                n_desired=n,
+                parallel_fraction=parallel_fraction,
+                filter_spec=filter_spec,
+                seed=draw_seed,
+                conformer_energies=conformer_energies,
+                conformer_weighting=conformer_weighting,
+                boltzmann_temperature=boltzmann_temperature,
+                preferred_site_types=preferred,
+                site_index_weight=(_POROUS_SITE_INDEX_WEIGHT if prefer_pores else 0.0),
+                dissociative=False,
+                n_hollow_pairs=0,
+                site_indices=list(indices),
+            )
         )
         return specs[:n]
 
@@ -809,6 +803,56 @@ def _enumerate_reserved_substrate_and_ligand(
         if len(merged) >= n_desired:
             break
     return merged[:n_desired]
+
+
+def _grid_batch_kwargs(
+    info: _SpecGridInfo,
+    *,
+    n_conformers: int,
+    n_desired: int,
+    parallel_fraction: float,
+    filter_spec: Callable[[PlacementSpec], bool] | None,
+    seed: int,
+    conformer_energies: list[float] | None,
+    conformer_weighting: str,
+    boltzmann_temperature: float,
+    preferred_site_types: tuple[str, ...] = (),
+    site_index_weight: float = 0.0,
+    dissociative: bool | None = None,
+    n_hollow_pairs: int | None = None,
+    site_indices: list[int] | None = None,
+) -> dict:
+    """Shared kwargs for :func:`policy.build_batch_placement_specs` grid draws."""
+    return {
+        "n_conformers": n_conformers,
+        "site_indices": list(
+            info.site_indices if site_indices is None else site_indices
+        ),
+        "site_type_for_index": lambda site_idx: _site_type_for_grid(info, site_idx),
+        "shape": info.shape,
+        "n_binders": info.n_binders,
+        "flat_aromatic": info.flat_aromatic,
+        "parallel_fraction": parallel_fraction,
+        "n_desired": n_desired,
+        "filter_spec": filter_spec,
+        "dissociative": (
+            bool(info.is_dissociative) if dissociative is None else dissociative
+        ),
+        "n_hollow_pairs": (
+            int(info.n_hollow_pairs) if n_hollow_pairs is None else n_hollow_pairs
+        ),
+        "seed": seed,
+        "preferred_site_types": preferred_site_types,
+        "site_index_weight": site_index_weight,
+        "conformer_energies": conformer_energies,
+        "conformer_weighting": conformer_weighting,
+        "boltzmann_temperature": boltzmann_temperature,
+        "site_is_void_for_index": lambda site_idx: _site_is_void_for_grid(
+            info, site_idx
+        ),
+        "site_bin_for_index": lambda site_idx: _site_bin_for_grid(info, site_idx),
+        "site_clearance_for_index": _clearance_for_grid(info),
+    }
 
 
 def _enumerate_covered_specs(
@@ -848,28 +892,21 @@ def _enumerate_covered_specs(
         if n <= 0 or not info.site_indices:
             return []
         return policy.build_batch_placement_specs(
-            n_conformers=n_conformers,
-            site_indices=list(info.site_indices),
-            site_type_for_index=lambda site_idx: _site_type_for_grid(info, site_idx),
-            shape=info.shape,
-            n_binders=info.n_binders,
-            flat_aromatic=info.flat_aromatic,
-            parallel_fraction=parallel_fraction,
-            n_desired=n,
-            filter_spec=filter_spec,
-            dissociative=False,
-            n_hollow_pairs=0,
-            seed=draw_seed,
-            preferred_site_types=(),
-            site_index_weight=0.0,
-            conformer_energies=conformer_energies,
-            conformer_weighting=conformer_weighting,
-            boltzmann_temperature=boltzmann_temperature,
-            site_is_void_for_index=lambda site_idx: _site_is_void_for_grid(
-                info, site_idx
-            ),
-            site_bin_for_index=lambda site_idx: _site_bin_for_grid(info, site_idx),
-            site_clearance_for_index=_clearance_for_grid(info),
+            **_grid_batch_kwargs(
+                info,
+                n_conformers=n_conformers,
+                n_desired=n,
+                parallel_fraction=parallel_fraction,
+                filter_spec=filter_spec,
+                seed=draw_seed,
+                conformer_energies=conformer_energies,
+                conformer_weighting=conformer_weighting,
+                boltzmann_temperature=boltzmann_temperature,
+                preferred_site_types=(),
+                site_index_weight=0.0,
+                dissociative=False,
+                n_hollow_pairs=0,
+            )
         )
 
     specs: list[PlacementSpec] = []
@@ -1019,26 +1056,19 @@ def enumerate_placement_specs(
         )
     preferred = _preferred_site_bins(info, prefer_pores=prefer_pores)
     return policy.build_batch_placement_specs(
-        n_conformers=len(conformers),
-        site_indices=list(info.site_indices),
-        site_type_for_index=lambda site_idx: _site_type_for_grid(info, site_idx),
-        shape=info.shape,
-        n_binders=info.n_binders,
-        flat_aromatic=info.flat_aromatic,
-        parallel_fraction=parallel_fraction,
-        n_desired=n_desired,
-        filter_spec=filter_spec,
-        dissociative=info.is_dissociative,
-        n_hollow_pairs=info.n_hollow_pairs,
-        seed=eff_seed,
-        preferred_site_types=preferred,
-        site_index_weight=(_POROUS_SITE_INDEX_WEIGHT if prefer_pores else 0.0),
-        conformer_energies=conformer_energies,
-        conformer_weighting=config.conformer_weighting,
-        boltzmann_temperature=config.boltzmann_temperature,
-        site_is_void_for_index=lambda site_idx: _site_is_void_for_grid(info, site_idx),
-        site_bin_for_index=lambda site_idx: _site_bin_for_grid(info, site_idx),
-        site_clearance_for_index=_clearance_for_grid(info),
+        **_grid_batch_kwargs(
+            info,
+            n_conformers=len(conformers),
+            n_desired=n_desired,
+            parallel_fraction=parallel_fraction,
+            filter_spec=filter_spec,
+            seed=eff_seed,
+            conformer_energies=conformer_energies,
+            conformer_weighting=config.conformer_weighting,
+            boltzmann_temperature=config.boltzmann_temperature,
+            preferred_site_types=preferred,
+            site_index_weight=(_POROUS_SITE_INDEX_WEIGHT if prefer_pores else 0.0),
+        )
     )
 
 

@@ -17,6 +17,8 @@ from ase.neighborlist import primitive_neighbor_list
 from .._logging import log_context, log_prefix_context, warn_once
 from .._messages import (
     MISSING_REFERENCE_ENERGY_FMT,
+    SKIP_DESORPTION_CHECK_WARNING,
+    could_not_generate_conformers,
     missing_reference_energy,
     num_placements_must_be_set,
 )
@@ -471,8 +473,7 @@ def _validate_adsorption(
         warn_once(
             logger,
             "shared.skip_desorption",
-            "skip_desorption_check=True: desorption distance checks disabled; "
-            "results may include desorbed structures",
+            SKIP_DESORPTION_CHECK_WARNING,
         )
         return True, "", float(min_d)
     if min_d > config.binding_distance_threshold:
@@ -1082,6 +1083,7 @@ def resolve_saturation_step_workload_config(
     symmetry_broken: bool,
     bo_enabled: bool,
     material_type: str,
+    site_context: SiteContext | None = None,
 ) -> AdsorptionConfig:
     """Resolve placement budget before multi-molecule budget splitting.
 
@@ -1111,6 +1113,7 @@ def resolve_saturation_step_workload_config(
     site_context = site_context_for_sampling(
         slab_for_sites,
         config,
+        site_context,
         material_type=material_type,
         symmetry_broken=symmetry_broken,
         full_slab=slab_atoms,
@@ -1324,9 +1327,7 @@ def _prepare_molecule_screening(
                 return (
                     None,
                     ConformerFailure(
-                        reason=(
-                            f"could not generate conformers for {request.molecule_name}"
-                        )
+                        reason=could_not_generate_conformers(request.molecule_name)
                     ),
                     resolved_reference,
                 )

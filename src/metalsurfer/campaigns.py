@@ -2,7 +2,6 @@
 
 import logging
 import time
-import warnings
 from collections.abc import Callable
 from typing import Any, Literal, cast
 
@@ -122,7 +121,7 @@ def _run_binding_campaign(
         ).as_posix()
         msg = empty_molecule_input_message(load_status, listed_csv=listed_csv)
         if msg is not None:
-            warnings.warn(msg, stacklevel=3)
+            logger.warning(msg)
         return BindingCampaignResult(
             mode=mode,
             surface_type=surface_type,

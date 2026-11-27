@@ -9,6 +9,8 @@ from collections.abc import Hashable
 import numpy as np
 from ase import Atoms
 
+from ..config import AdsorptionConfig
+
 
 def _pack_optional_float(value: float | None) -> bytes:
     """Serialize an optional float to a stable, comparable byte string.
@@ -19,6 +21,38 @@ def _pack_optional_float(value: float | None) -> bytes:
     if value is None:
         return b"\x00" + struct.pack("<d", float("nan"))
     return b"\x01" + struct.pack("<d", float(value))
+
+
+def pack_voronoi_site_config_bytes(
+    config: AdsorptionConfig,
+    material_type: str,
+    *,
+    equivalence_tolerance_leading: bool = False,
+    append_min_adsorbate_separation: bool = False,
+) -> bytes:
+    """Pack Voronoi/site-enumeration knobs shared across placement cache keys."""
+    equiv = struct.pack("<d", float(config.site_equivalence_tolerance))
+    head = (
+        _pack_optional_float(config.voronoi_probe_radius)
+        + _pack_optional_float(config.voronoi_max_site_distance)
+        + _pack_optional_float(config.top_layer_tolerance)
+        + struct.pack("<d", float(config.planar_z_variance_threshold))
+    )
+    tail = (
+        struct.pack("<?", bool(config.voronoi_site_enrichment))
+        + struct.pack("<?", bool(config.voronoi_auto_widen))
+        + str(config.site_classification_method).encode()
+        + b"\x00"
+        + str(config.site_generator).encode()
+        + b"\x00"
+        + material_type.encode()
+    )
+    cfg_bytes = (
+        equiv + head + tail if equivalence_tolerance_leading else head + equiv + tail
+    )
+    if append_min_adsorbate_separation:
+        cfg_bytes += struct.pack("<d", float(config.min_adsorbate_separation))
+    return cfg_bytes
 
 
 def pack_atoms_geometry_bytes(atoms: Atoms, *, include_pbc: bool = False) -> bytes:

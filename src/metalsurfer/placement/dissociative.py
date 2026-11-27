@@ -1,7 +1,6 @@
 """Dissociative diatomic placement and hollow site pair enumeration."""
 
 import hashlib
-import struct
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -15,8 +14,8 @@ from ..models import PlacementDescriptor, PlacementPose, PlacementSpec
 from . import geometry as geom
 from ._cache_key import (
     BoundedFifoCache,
-    _pack_optional_float,
     pack_atoms_geometry_bytes,
+    pack_voronoi_site_config_bytes,
 )
 from ._constants import (
     _ATOP_INJECTION_HEIGHT_FACTOR,
@@ -126,20 +125,11 @@ def _dissociative_pair_cache_key(
     material_type: str,
 ) -> str:
     geometry_bytes = pack_atoms_geometry_bytes(slab_for_sites, include_pbc=False)
-    cfg_bytes = (
-        struct.pack("<d", float(config.site_equivalence_tolerance))
-        + _pack_optional_float(config.voronoi_probe_radius)
-        + _pack_optional_float(config.voronoi_max_site_distance)
-        + _pack_optional_float(config.top_layer_tolerance)
-        + struct.pack("<d", float(config.planar_z_variance_threshold))
-        + struct.pack("<?", bool(config.voronoi_site_enrichment))
-        + struct.pack("<?", bool(config.voronoi_auto_widen))
-        + str(config.site_classification_method).encode()
-        + b"\x00"
-        + str(config.site_generator).encode()
-        + b"\x00"
-        + material_type.encode()
-        + struct.pack("<d", float(config.min_adsorbate_separation))
+    cfg_bytes = pack_voronoi_site_config_bytes(
+        config,
+        material_type,
+        equivalence_tolerance_leading=True,
+        append_min_adsorbate_separation=True,
     )
     return hashlib.sha256(geometry_bytes + cfg_bytes).hexdigest()
 

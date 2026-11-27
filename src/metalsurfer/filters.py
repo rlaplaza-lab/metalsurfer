@@ -26,6 +26,7 @@ from scipy.optimize import linear_sum_assignment
 from scipy.sparse.csgraph import connected_components
 
 from ._logging import warn_once
+from ._messages import SKIP_DESORPTION_CHECK_WARNING
 from ._numeric_defaults import BINDING_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM
 from ._rdkit import Chem, require_rdkit_chem
 from ._utils import cell_has_volume
@@ -894,8 +895,7 @@ def filter_results(
         warn_once(
             logger,
             "filters.skip_desorption",
-            "skip_desorption_check=True: desorption distance checks disabled; "
-            "results may include desorbed structures",
+            SKIP_DESORPTION_CHECK_WARNING,
         )
 
     if not config.skip_topology_check:

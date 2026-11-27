@@ -804,7 +804,7 @@ def _rank_alloy_variants(
 
         try:
             results = batch_static(variants, ts_model, require_energy=False)
-        except (RuntimeError, MemoryError, OSError, DependencyMissingError) as exc:
+        except (RuntimeError, MemoryError, OSError) as exc:
             logger.warning("Batched %s scoring failed: %s", context.lower(), exc)
             ranking_failure = exc
         else:

@@ -59,6 +59,18 @@ from ._validation import (
 logger = logging.getLogger(__name__)
 
 
+def _warn_dropped_systems(reason: str, idxs: list[int]) -> None:
+    """Log a warning when batched optimisation drops systems for *reason*."""
+    if not idxs:
+        return
+    logger.warning(
+        "Batched optimisation dropped %d system(s) with %s (indices: %s)",
+        len(idxs),
+        reason,
+        idxs,
+    )
+
+
 @dataclass(frozen=True)
 class _AutobatcherSetup:
     autobatcher: Any
@@ -432,11 +444,23 @@ def estimate_parallel_relaxation_capacity(
                 n_systems=1,
                 config=config,
             )
-            probed = _deps.determine_max_batch_size(
-                state,
-                ts_model,
-                max_atoms=resolved_max_atoms_to_try,
-            )
+            try:
+                probed = _deps.determine_max_batch_size(
+                    state,
+                    ts_model,
+                    max_atoms=resolved_max_atoms_to_try,
+                )
+            except _deps._CAPACITY_PROBE_ERRORS as probe_exc:
+                logger.warning(
+                    "determine_max_batch_size failed (%s); using single-system "
+                    "capacity with scaler=max_n_atoms=%d (not cached)",
+                    probe_exc,
+                    max_n_atoms,
+                )
+                return ParallelCapacity(
+                    n_systems=1,
+                    max_memory_scaler=float(max(1, max_n_atoms)),
+                )
             n_systems = max(1, int(probed * padding))
             scaler = float(n_systems) * first_metric
 
@@ -451,11 +475,15 @@ def estimate_parallel_relaxation_capacity(
             scaler,
         )
         return capacity
+    except OptimizationError:
+        raise
     except DependencyMissingError:
         raise
     except _deps._CAPACITY_PROBE_ERRORS as exc:
         logger.warning(
-            "Parallel capacity probe failed (%s); using capacity=%d (not cached)",
+            "Parallel capacity probe failed (%s); using capacity=%d (not cached). "
+            "Autotune will serialize relaxations; set autobatcher_max_memory_scaler "
+            "or fix the probe environment if throughput matters.",
             exc,
             fallback.n_systems,
         )
@@ -529,7 +557,7 @@ def _split_forces_by_system(
     per-atom-count split cannot be verified.
 
     Returns ``None`` when forces are unavailable or cannot be aligned, and
-    raises ``RuntimeError`` if a ``system_idx`` split does not reproduce
+    raises ``OptimizationError`` if a ``system_idx`` split does not reproduce
     *atom_counts*.
     """
     forces = getattr(batch, "forces", None)
@@ -657,7 +685,7 @@ def _forces_for_optimized_systems(
             validate_pbc=False,
             require_energy=False,
         )
-    except (RuntimeError, MemoryError, OSError, DependencyMissingError):
+    except (RuntimeError, MemoryError, OSError):
         logger.warning("ts.static force recovery failed", exc_info=True)
         return [None] * n_systems
 
@@ -1003,20 +1031,14 @@ def optimize_adsorbate_slab_batched(  # pragma: no cover - requires MLIP stack /
             calc._last_positions_hash = _positions_cell_hash(atoms)
             atoms.calc = calc
             out.append(atoms)
-        if bad_energy_idxs:
-            logger.warning(
-                "Batched optimisation dropped %d system(s) with non-finite energy "
-                "(indices: %s)",
-                len(bad_energy_idxs),
-                bad_energy_idxs,
-            )
-        if bad_force_idxs:
-            logger.warning(
-                "Batched optimisation dropped %d system(s) with missing/non-finite "
-                "forces (indices: %s)",
-                len(bad_force_idxs),
-                bad_force_idxs,
-            )
+        _warn_dropped_systems(
+            "non-finite energy",
+            bad_energy_idxs,
+        )
+        _warn_dropped_systems(
+            "missing/non-finite forces",
+            bad_force_idxs,
+        )
         n_ok = sum(1 for a in out if a is not None)
         logger.info(
             "Autobatcher optimisation succeeded: %d/%d systems",

@@ -10,7 +10,7 @@ from typing import Any, Literal, NamedTuple
 from ase import Atoms
 
 from .._logging import log_context, log_prefix_context
-from .._messages import num_placements_must_be_set
+from .._messages import could_not_generate_conformers, num_placements_must_be_set
 from ..config import AdsorptionConfig
 from ..conformers import create_conformers_from_smiles
 from ..filters import adsorbate_connected_components
@@ -32,7 +32,7 @@ from ..placement.generators import (
     distribute_placement_budget,
     estimate_conformer_count,
 )
-from ..placement.site_context import site_context_for_sampling
+from ..placement.site_context import SiteContext, site_context_for_sampling
 from ..reporting import ConformerFailure, FailureSummary
 from ..result_paths import SATURATION_SUMMARY_CSV, results_dir_for
 from ..surface_prep import Substrate, apply_material_pbc
@@ -356,6 +356,7 @@ def _resolve_step_workload_config(
     base_slab_for_frozen: Atoms,
     symmetry_broken: bool,
     material_type: str,
+    site_context: SiteContext | None = None,
 ) -> AdsorptionConfig:
     """Autotune and scale the step workload, or return *config* unchanged."""
     if not needs_workload_autotune(config, bo=bo_enabled):
@@ -374,6 +375,7 @@ def _resolve_step_workload_config(
             symmetry_broken=symmetry_broken,
             bo_enabled=bo_enabled,
             material_type=material_type,
+            site_context=site_context,
         )
     )
 
@@ -959,7 +961,7 @@ def _run_single_molecule_saturation(
         _record_saturation_failure(
             failure_summary_out,
             molecule,
-            ConformerFailure(reason=f"could not generate conformers for {molecule}"),
+            ConformerFailure(reason=could_not_generate_conformers(molecule)),
         )
         return None
     cached_conformers, cached_conformer_energies = pack
@@ -1046,7 +1048,6 @@ def _run_single_molecule_saturation(
                     conformer_energies=cached_conformer_energies,
                     site_context=None,
                     topology_check=topology_check,
-                    debug_sites_step=step,
                     log_prefix=f"Saturation for {molecule} | step {step} | ",
                 )
             _record_saturation_failure(
@@ -1221,7 +1222,7 @@ def _run_multi_molecule_saturation(
             _record_saturation_failure(
                 failure_summary_out,
                 mol,
-                ConformerFailure(reason=f"could not generate conformers for {mol}"),
+                ConformerFailure(reason=could_not_generate_conformers(mol)),
             )
             continue
         conformer_cache[mol] = pack
@@ -1279,6 +1280,13 @@ def _run_multi_molecule_saturation(
             slab.atoms, base_slab, material_type=slab.material_type
         )
         largest_conformers, _ = conformer_cache[largest_mol]
+        shared_site_context = site_context_for_sampling(
+            slab_for_sites,
+            config,
+            material_type=slab.material_type,
+            symmetry_broken=symmetry_broken,
+            full_slab=slab.atoms,
+        )
         step_config = _resolve_step_workload_config(
             config,
             bo_enabled=bo_enabled,
@@ -1290,8 +1298,17 @@ def _run_multi_molecule_saturation(
             base_slab_for_frozen=base_slab,
             symmetry_broken=symmetry_broken,
             material_type=slab.material_type,
+            site_context=shared_site_context,
         )
         config = step_config
+        shared_site_context = site_context_for_sampling(
+            slab_for_sites,
+            step_config,
+            shared_site_context,
+            material_type=slab.material_type,
+            symmetry_broken=symmetry_broken,
+            full_slab=slab.atoms,
+        )
 
         num_placements = step_config.num_placements
         if num_placements is None:
@@ -1306,14 +1323,6 @@ def _run_multi_molecule_saturation(
         new_bo_memory_raw: dict[str, BOStepMemory | None] = {
             mol: None for mol in active_molecules
         }
-
-        shared_site_context = site_context_for_sampling(
-            slab_for_sites,
-            step_config,
-            material_type=slab.material_type,
-            symmetry_broken=symmetry_broken,
-            full_slab=slab.atoms,
-        )
         _dump_debug_sites_if_enabled(
             slab_for_sites,
             shared_site_context,

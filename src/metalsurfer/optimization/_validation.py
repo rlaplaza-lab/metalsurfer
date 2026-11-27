@@ -13,6 +13,7 @@ import numpy as np
 from ase import Atoms
 
 from ..config import AdsorptionConfig
+from ..placement._cache_key import pack_atoms_geometry_bytes
 from . import _deps
 
 logger = logging.getLogger(__name__)
@@ -41,10 +42,7 @@ def _validate_model_pbc(atoms: Atoms, *, context: str) -> None:
 
 def _positions_cell_hash(atoms: Atoms) -> int:
     """Fast content hash of positions + cell + atomic numbers for cache invalidation."""
-    pos_bytes = atoms.get_positions().tobytes()
-    cell_bytes = np.asarray(atoms.get_cell()).tobytes()
-    num_bytes = atoms.get_atomic_numbers().tobytes()
-    return hash((pos_bytes, cell_bytes, num_bytes))
+    return hash(pack_atoms_geometry_bytes(atoms))
 
 
 def _resolve_ts_optimizer(name: str) -> Any:

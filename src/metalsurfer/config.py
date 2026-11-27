@@ -18,6 +18,7 @@ from ._numeric_defaults import (
     CONTACT_COVALENT_SCALE_DEFAULT,
     CONTACT_MAX_CLOSEST_APPROACH_ANGSTROM,
     DEFAULT_BO_SIMILARITY_LENGTHSCALE,
+    DEFAULT_BOLTZMANN_TEMPERATURE_K,
     DEFAULT_DEVICE,
     DEFAULT_DISPERSION,
     DEFAULT_FMAX,
@@ -46,6 +47,7 @@ from ._numeric_defaults import (
     STANDARD_PRESSURE_BAR,
     STANDARD_TEMPERATURE_K,
 )
+from ._version import __version__
 from .models import PlacementSpec
 from .site_plugin_ids import (
     PLUGIN_ALLOWED_MATERIALS as _SITE_GENERATOR_ALLOWED_MATERIALS,
@@ -187,7 +189,7 @@ def _format_unknown_key(
 ) -> str:
     """Format one unknown key with a rename / close-match hint."""
     if renamed_to is not None:
-        return f"{key!r} (renamed to {renamed_to!r} in 0.10.0)"
+        return f"{key!r} (renamed to {renamed_to!r} in {__version__})"
     if allowed:
         suggestion = difflib.get_close_matches(key, sorted(allowed), n=1, cutoff=0.6)
         if suggestion:
@@ -209,10 +211,7 @@ def _coerce_config_dataclass[T](
         return cls(**extra)
     if isinstance(data, cls):
         return data
-    unknown = sorted(set(data) - known)
-    if unknown:
-        quoted = ", ".join(format_unknown(key) for key in unknown)
-        raise ValueError(f"{context} contains unknown keys: {quoted}")
+    _reject_unknown_keys(data, known, context=context, format_unknown=format_unknown)
     return cls(**dict(data), **extra)
 
 
@@ -279,6 +278,84 @@ def _check_bool(name: str, value: Any) -> None:
 def _check_positive_int(name: str, value: int) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{name} must be a positive integer, got {value!r}")
+
+
+def _check_in_range(
+    name: str,
+    value: float,
+    low: float,
+    high: float,
+    *,
+    low_inclusive: bool = True,
+    high_inclusive: bool = True,
+) -> None:
+    """Require *value* in ``[low, high]`` (inclusivity controlled by flags)."""
+    low_ok = value >= low if low_inclusive else value > low
+    high_ok = value <= high if high_inclusive else value < high
+    if not isfinite(value) or not low_ok or not high_ok:
+        left = "[" if low_inclusive else "("
+        right = "]" if high_inclusive else ")"
+        raise ValueError(f"{name} must be in {left}{low}, {high}{right}, got {value!r}")
+
+
+def _reject_unknown_keys(
+    data: Mapping[str, Any],
+    allowed: frozenset[str] | set[str] | Iterable[str],
+    *,
+    context: str,
+    format_unknown: Callable[[str], str] = str,
+    suffix: str = "",
+) -> None:
+    """Raise ``ValueError`` when *data* contains keys outside *allowed*."""
+    unknown = sorted(set(data) - set(allowed))
+    if not unknown:
+        return
+    quoted = ", ".join(format_unknown(key) for key in unknown)
+    message = f"{context} contains unknown keys: {quoted}"
+    if suffix:
+        message = f"{message}. {suffix}"
+    raise ValueError(message)
+
+
+def _coerce_float_sequence(
+    raw: Any,
+    *,
+    name: str,
+    allow_scalar: bool,
+    require_positive: bool,
+) -> float | tuple[float, ...] | None:
+    """Coerce *raw* to a finite float or a non-empty tuple of finite floats."""
+    if raw is None:
+        return None
+    if allow_scalar:
+        if isinstance(raw, bool):
+            raise ValueError(f"{name} must be a finite number or sequence, got {raw!r}")
+        if isinstance(raw, (int, float)):
+            value = float(raw)
+            if not isfinite(value) or (require_positive and value <= 0):
+                kind = "positive" if require_positive else "finite"
+                raise ValueError(f"{name} must be {kind}, got {raw!r}")
+            return value
+    if isinstance(raw, (str, bytes)) or not isinstance(raw, (list, tuple)):
+        kind = (
+            "a sequence of positive floats or None"
+            if require_positive and not allow_scalar
+            else "a finite number, a sequence of finite numbers, or None"
+        )
+        raise ValueError(f"{name} must be {kind}, got {type(raw).__name__}")
+    if len(raw) == 0:
+        raise ValueError(f"{name} must be non-empty when provided")
+    values: list[float] = []
+    for i, item in enumerate(raw):
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            kind = "a positive number" if require_positive else "a finite number"
+            raise ValueError(f"{name}[{i}] must be {kind}, got {item!r}")
+        value = float(item)
+        if not isfinite(value) or (require_positive and value <= 0):
+            kind = "positive" if require_positive else "finite"
+            raise ValueError(f"{name}[{i}] must be {kind}, got {item!r}")
+        values.append(value)
+    return tuple(values)
 
 
 def _check_device(value: str) -> None:
@@ -427,65 +504,28 @@ def validate_uma_setup(
 
 def _validate_saturation_activities(root: "AdsorptionConfig") -> None:
     """Coerce and validate ``saturation_activities`` (length vs molecules later)."""
-    raw = root.saturation_activities
-    if raw is None:
+    coerced = _coerce_float_sequence(
+        root.saturation_activities,
+        name="saturation_activities",
+        allow_scalar=False,
+        require_positive=True,
+    )
+    if coerced is None:
         return
-    if isinstance(raw, (str, bytes)) or not isinstance(raw, (list, tuple)):
-        raise ValueError(
-            "saturation_activities must be a sequence of positive floats or None, "
-            f"got {type(raw).__name__}"
-        )
-    if len(raw) == 0:
-        raise ValueError("saturation_activities must be non-empty when provided")
-    activities: list[float] = []
-    for i, value in enumerate(raw):
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError(
-                f"saturation_activities[{i}] must be a positive number, got {value!r}"
-            )
-        if not isfinite(float(value)) or float(value) <= 0:
-            raise ValueError(
-                f"saturation_activities[{i}] must be positive, got {value!r}"
-            )
-        activities.append(float(value))
-    root.saturation_activities = tuple(activities)
+    root.saturation_activities = cast(tuple[float, ...], coerced)
 
 
 def _validate_saturation_omega_shift(root: "AdsorptionConfig") -> None:
     """Coerce scalar or per-species Ω shift (eV); length vs molecules later."""
-    raw = root.saturation_omega_shift
-    if raw is None:
+    coerced = _coerce_float_sequence(
+        root.saturation_omega_shift,
+        name="saturation_omega_shift",
+        allow_scalar=True,
+        require_positive=False,
+    )
+    if coerced is None:
         return
-    if isinstance(raw, bool):
-        raise ValueError(
-            f"saturation_omega_shift must be a finite number or sequence, got {raw!r}"
-        )
-    if isinstance(raw, (int, float)):
-        value = float(raw)
-        if not isfinite(value):
-            raise ValueError(f"saturation_omega_shift must be finite, got {raw!r}")
-        root.saturation_omega_shift = value
-        return
-    if isinstance(raw, (str, bytes)) or not isinstance(raw, (list, tuple)):
-        raise ValueError(
-            "saturation_omega_shift must be a finite number, a sequence of "
-            f"finite numbers, or None, got {type(raw).__name__}"
-        )
-    if len(raw) == 0:
-        raise ValueError("saturation_omega_shift must be non-empty when provided")
-    shifts: list[float] = []
-    for i, item in enumerate(raw):
-        if isinstance(item, bool) or not isinstance(item, (int, float)):
-            raise ValueError(
-                f"saturation_omega_shift[{i}] must be a finite number, got {item!r}"
-            )
-        value = float(item)
-        if not isfinite(value):
-            raise ValueError(
-                f"saturation_omega_shift[{i}] must be finite, got {item!r}"
-            )
-        shifts.append(value)
-    root.saturation_omega_shift = tuple(shifts)
+    root.saturation_omega_shift = coerced
 
 
 def _validate_saturation_reservoir(root: "AdsorptionConfig") -> None:
@@ -540,11 +580,7 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
     _check_positive("max_closest_approach", root.max_closest_approach)
     _check_positive_int("min_contact_atoms", root.min_contact_atoms)
     _check_positive("contact_covalent_scale", root.contact_covalent_scale)
-    if not 0.5 <= root.contact_covalent_scale <= 2.0:
-        raise ValueError(
-            "contact_covalent_scale must be in [0.5, 2.0], "
-            f"got {root.contact_covalent_scale}"
-        )
+    _check_in_range("contact_covalent_scale", root.contact_covalent_scale, 0.5, 2.0)
 
     if root.num_placements is not None:
         _check_positive_int("num_placements", root.num_placements)
@@ -589,10 +625,7 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
     ):
         _check_range_tuple(xy_name, xy_value, allow_equal=True)
 
-    if not 0.5 <= root.min_contact_ratio <= 1.2:
-        raise ValueError(
-            f"min_contact_ratio must be in [0.5, 1.2], got {root.min_contact_ratio}"
-        )
+    _check_in_range("min_contact_ratio", root.min_contact_ratio, 0.5, 1.2)
     if root.max_initial_distance is not None:
         _check_positive("max_initial_distance", root.max_initial_distance)
     if (
@@ -623,15 +656,20 @@ def _validate_placement(root: "AdsorptionConfig") -> None:
     _check_bool("voronoi_site_enrichment", root.voronoi_site_enrichment)
     _check_bool("occupancy_use_footprint", root.occupancy_use_footprint)
     _check_bool("placement_clash_descent", root.placement_clash_descent)
-    if not (
-        isinstance(root.occupancy_footprint_scale, (int, float))
-        and not isinstance(root.occupancy_footprint_scale, bool)
-        and 0.0 < float(root.occupancy_footprint_scale) <= 2.0
+    if isinstance(root.occupancy_footprint_scale, bool) or not isinstance(
+        root.occupancy_footprint_scale, (int, float)
     ):
         raise ValueError(
             "occupancy_footprint_scale must be in (0, 2], "
             f"got {root.occupancy_footprint_scale!r}"
         )
+    _check_in_range(
+        "occupancy_footprint_scale",
+        float(root.occupancy_footprint_scale),
+        0.0,
+        2.0,
+        low_inclusive=False,
+    )
     _check_choice(
         "site_classification_method",
         root.site_classification_method,
@@ -708,11 +746,12 @@ def _validate_relaxation(root: "AdsorptionConfig") -> None:
     _check_positive_int("slab_relaxation_steps", root.slab_relaxation_steps)
     if root.slab_relaxation_fmax is not None:
         _check_positive("slab_relaxation_fmax", root.slab_relaxation_fmax)
-    if not 0.1 <= root.autobatcher_max_memory_padding <= 1.0:
-        raise ValueError(
-            "autobatcher_max_memory_padding must be in [0.1, 1.0], "
-            f"got {root.autobatcher_max_memory_padding}"
-        )
+    _check_in_range(
+        "autobatcher_max_memory_padding",
+        root.autobatcher_max_memory_padding,
+        0.1,
+        1.0,
+    )
     if root.autobatcher_max_memory_scaler is not None:
         _check_positive(
             "autobatcher_max_memory_scaler", root.autobatcher_max_memory_scaler
@@ -803,11 +842,7 @@ def _validate_bo(root: "AdsorptionConfig") -> None:
         )
     if bo.candidate_pool_size is not None:
         _check_positive_int("bo.candidate_pool_size", bo.candidate_pool_size)
-    if not isfinite(bo.failure_penalty_default) or bo.failure_penalty_default < 0:
-        raise ValueError(
-            "bo.failure_penalty_default must be a finite non-negative value, "
-            f"got {bo.failure_penalty_default!r}"
-        )
+    _check_non_negative("bo.failure_penalty_default", bo.failure_penalty_default)
     if not isinstance(bo.failure_penalty_overrides, dict):
         raise ValueError(
             "bo.failure_penalty_overrides must be a dict[str, float], "
@@ -819,11 +854,10 @@ def _validate_bo(root: "AdsorptionConfig") -> None:
                 "bo.failure_penalty_overrides keys must be non-empty strings, "
                 f"got {penalty_key!r}"
             )
-        if not isfinite(penalty_value) or penalty_value < 0:
-            raise ValueError(
-                "bo.failure_penalty_overrides values must be finite non-negative, "
-                f"got {penalty_value!r} for key {penalty_key!r}"
-            )
+        _check_non_negative(
+            f"bo.failure_penalty_overrides[{penalty_key!r}]",
+            penalty_value,
+        )
     if not isinstance(bo.transfer, BOTransferConfig):
         raise ValueError(
             f"bo.transfer must be a BOTransferConfig, got {type(bo.transfer).__name__}"
@@ -844,7 +878,7 @@ def _validate_io(root: "AdsorptionConfig") -> None:
             f"vasp_kpoints must be a 3-tuple, got length {len(root.vasp_kpoints)}"
         )
     for i, k in enumerate(root.vasp_kpoints):
-        if not isinstance(k, int) or k <= 0:
+        if isinstance(k, bool) or not isinstance(k, int) or k <= 0:
             raise ValueError(f"vasp_kpoints[{i}] must be a positive integer, got {k!r}")
 
 
@@ -988,7 +1022,7 @@ class AdsorptionConfig:
     connectivity_multiplier: float = 1.3
     seed: int = DEFAULT_SEED
     # Weighting T (K) for boltzmann prior only — NOT a stochastic pre-filter.
-    boltzmann_temperature: float = 300.0
+    boltzmann_temperature: float = DEFAULT_BOLTZMANN_TEMPERATURE_K
     min_pbc_image_separation: float = MIN_PBC_IMAGE_SEPARATION_DEFAULT_ANGSTROM
     vacuum_box_size: float = 20.0
     vasp_encut: int = 400
@@ -1095,14 +1129,7 @@ class AdsorptionConfig:
                 "connectivity_multiplier must be a positive number, "
                 f"got {self.connectivity_multiplier!r}"
             )
-        if (
-            not isfinite(self.connectivity_multiplier)
-            or self.connectivity_multiplier <= 0
-        ):
-            raise ValueError(
-                "connectivity_multiplier must be positive, "
-                f"got {self.connectivity_multiplier!r}"
-            )
+        _check_positive("connectivity_multiplier", self.connectivity_multiplier)
 
         if not self.model_name:
             raise ValueError("model_name must be a non-empty string")

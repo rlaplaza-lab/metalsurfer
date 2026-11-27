@@ -83,3 +83,5 @@ DEFAULT_UCB_KAPPA: float = 1.96  # two-sided 95% normal quantile
 K_B_EV_PER_K: float = 8.617e-5
 STANDARD_TEMPERATURE_K: float = 298.15
 STANDARD_PRESSURE_BAR: float = 1.0  # p° in Ω = E_ads − k_B T ln(a · p / p°)
+# Conformer prior temperature (K). Distinct from STANDARD_TEMPERATURE_K (SATP).
+DEFAULT_BOLTZMANN_TEMPERATURE_K: float = 300.0

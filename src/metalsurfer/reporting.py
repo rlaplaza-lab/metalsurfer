@@ -7,6 +7,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, assert_never
 
+FailureStage = Literal[
+    "reference",
+    "conformers",
+    "placement",
+    "generation",
+    "optimization",
+    "validation",
+    "energy_cap",
+    "filter",
+]
+
 
 @dataclass(frozen=True)
 class ReferenceFailure:
@@ -120,12 +131,9 @@ def format_failure_summary_text(failure_summary: FailureSummary) -> str:
         lines.append(f"  Initial placements: {failure_summary.n_initial_placements}")
         if failure_summary.n_retry_attempts is not None:
             lines.append(f"  Retry attempts: {failure_summary.n_retry_attempts}")
-        if failure_summary.generation_failures:
-            lines.append("  Generation failures:")
-            for reason, count in sorted(
-                failure_summary.generation_failures.items(), key=lambda x: -x[1]
-            ):
-                lines.append(f"    {reason}: {count}")
+        _append_count_lines(
+            lines, "  Generation failures:", failure_summary.generation_failures
+        )
     elif isinstance(failure_summary, BOPlacementFailure):
         lines.append(f"  Candidate specs: {failure_summary.n_candidate_specs}")
         lines.append(f"  Valid pool: {failure_summary.n_valid_pool}")
@@ -175,14 +183,18 @@ def format_failures_by_molecule(
     return "\n".join(lines)
 
 
+def _append_count_lines(lines: list[str], header: str, counts: dict[str, int]) -> None:
+    if not counts:
+        return
+    lines.append(header)
+    for reason, count in sorted(counts.items(), key=lambda x: -x[1]):
+        lines.append(f"    {reason}: {count}")
+
+
 def _append_validation_failure_lines(
     lines: list[str], validation_failures: dict[str, int]
 ) -> None:
-    if not validation_failures:
-        return
-    lines.append("  Validation failures:")
-    for reason, count in sorted(validation_failures.items(), key=lambda x: -x[1]):
-        lines.append(f"    {reason}: {count}")
+    _append_count_lines(lines, "  Validation failures:", validation_failures)
 
 
 def results_output_suffix(*, write_vasp_inputs: bool) -> str:

@@ -64,7 +64,7 @@ def create_conformers_from_smiles(
 
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
-        logger.error("Could not parse SMILES: %s", smiles)
+        logger.warning("Could not parse SMILES: %s", smiles)
         return None
 
     mol = Chem.AddHs(mol)
@@ -79,7 +79,7 @@ def create_conformers_from_smiles(
         )
         AllChem.EmbedMolecule(mol, randomSeed=config.seed)
         if mol.GetNumConformers() == 0:
-            logger.error("Failed to generate any conformer for %s", smiles)
+            logger.warning("Failed to generate any conformer for %s", smiles)
             return None
         conf_ids = [0]
 

@@ -8,12 +8,10 @@ import pytest
 from ase import Atoms
 
 from metalsurfer.config import AdsorptionConfig, BOConfig
-from metalsurfer.filters import (
-    lateral_contact_shell,
-    min_interadsorbate_covalent_ratio,
-)
+from metalsurfer.filters import min_interadsorbate_covalent_ratio
 from metalsurfer.models import BOTransferInfo, ReferenceEnergies
 from metalsurfer.placement.geometry import occupied_neighbor_counts
+from metalsurfer.placement.occupancy import lateral_contact_shell
 from metalsurfer.reporting import ConformerFailure, PlacementFailure
 from metalsurfer.surface_prep import Substrate
 from metalsurfer.workflow import composite as composite_mod
@@ -120,7 +118,7 @@ def test_composition_budgets_equal_when_enough_slots():
     assert sum(budgets) == 6
 
 
-def test_homogeneous_delegates_assembly_seed_and_flags(monkeypatch):
+def test_homogeneous_delegates_flags(monkeypatch):
     slab = make_slab()
     config = AdsorptionConfig(
         seed=17,
@@ -156,32 +154,11 @@ def test_homogeneous_delegates_assembly_seed_and_flags(monkeypatch):
         conformers=[make_water()],
         conformer_energies=None,
         site_context=None,
-        debug_sites_step=None,
     )
-    assert captured["assembly_seed"] == 17
     assert captured["empty_pool_failure"] is True
     assert captured["assemble"] == "exact"
     assert captured["symmetry_broken"] is False
     assert captured["site_context"] is None
-
-    captured.clear()
-    screen_joint_tuplet_homogeneous(
-        smiles="O",
-        molecule_name="water",
-        current_slab=Substrate(slab, material_type="slab"),
-        calculator=None,
-        ref_step=ref,
-        ts_model=None,
-        config=config,
-        base_slab=slab,
-        E_slab=0.0,
-        symmetry_broken=False,
-        conformers=[make_water()],
-        conformer_energies=None,
-        site_context=None,
-        debug_sites_step=4,
-    )
-    assert captured["assembly_seed"] == 17 + 4
 
 
 def test_homogeneous_empty_pool_returns_placement_failure(monkeypatch):
@@ -273,14 +250,12 @@ def test_trimer_assembly_continues_after_a_short_seed(monkeypatch) -> None:
         return real_accept(group, index, **kwargs)
 
     monkeypatch.setattr(composite_mod, "_accept_packed_pose", _accept)
-    rng = np.random.default_rng(0)
     groups = assemble_joint_config_groups(
         poses,
         n_per_config=3,
         n_configs=1,
         slab_atoms=slab,
         config=config,
-        rng=rng,
         n_substrate=len(slab),
         material_type="slab",
     )
@@ -294,7 +269,6 @@ def test_trimer_assembly_continues_after_a_short_seed(monkeypatch) -> None:
         n_configs=1,
         slab_atoms=slab,
         config=config,
-        rng=rng,
         n_substrate=len(slab),
         material_type="slab",
     )
@@ -339,14 +313,12 @@ def test_assemblers_do_not_replace_a_clashing_neighbor() -> None:
             )
         )
 
-    rng = np.random.default_rng(0)
     exact_groups = assemble_joint_config_groups(
         poses,
         n_per_config=2,
         n_configs=1,
         slab_atoms=slab,
         config=config,
-        rng=rng,
         n_substrate=len(slab),
         material_type="slab",
     )
@@ -356,7 +328,6 @@ def test_assemblers_do_not_replace_a_clashing_neighbor() -> None:
         n_configs=1,
         slab_atoms=slab,
         config=config,
-        rng=rng,
         n_substrate=len(slab),
         material_type="slab",
     )
@@ -410,7 +381,6 @@ def test_full_catalog_draws_the_open_shell_before_a_neighbor():
     ]
     n_line = hops[-1] + 1
     positions = {index: np.array([float(index), 0.0, 0.0]) for index in range(n_line)}
-    rng = np.random.default_rng(0)
 
     def _sites(site_positions: dict[int, np.ndarray]) -> list[int]:
         groups = assemble_joint_config_groups(
@@ -419,7 +389,6 @@ def test_full_catalog_draws_the_open_shell_before_a_neighbor():
             n_configs=1,
             slab_atoms=slab,
             config=config,
-            rng=rng,
             n_substrate=len(slab),
             site_positions=site_positions,
             site_types={index: "hollow" for index in site_positions},
@@ -494,14 +463,12 @@ def test_assemblers_span_close_and_far_partners() -> None:
             )
         )
 
-    rng = np.random.default_rng(0)
     exact_groups = assemble_joint_config_groups(
         poses,
         n_per_config=2,
         n_configs=2,
         slab_atoms=slab,
         config=config,
-        rng=rng,
         n_substrate=len(slab),
         material_type="slab",
     )
@@ -511,7 +478,6 @@ def test_assemblers_span_close_and_far_partners() -> None:
         n_configs=2,
         slab_atoms=slab,
         config=config,
-        rng=rng,
         n_substrate=len(slab),
         material_type="slab",
     )

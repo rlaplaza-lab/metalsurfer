@@ -91,6 +91,12 @@ class Site:
         return float(self.xyz[2])
 
 
+def site_sort_key(site: Site) -> tuple[float, float, float, str]:
+    """Stable sort key: Cartesian xyz then site type string."""
+    xyz = np.asarray(site.xyz, dtype=float).reshape(3)
+    return (float(xyz[0]), float(xyz[1]), float(xyz[2]), str(site.site_type))
+
+
 def with_symmetry(
     site: Site,
     *,

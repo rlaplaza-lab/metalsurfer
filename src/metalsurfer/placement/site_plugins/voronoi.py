@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from ..._messages import no_accessible_sites_message
 from .._constants import _ATOP_INJECTION_HEIGHT_FACTOR
 from ..site_coords import (
     median_nn_or_fallback,
@@ -96,12 +97,13 @@ class VoronoiGenerator:
 
         if len(vertices) == 0 and material_type == "porous":
             logger.warning(
-                "No accessible sites for %d-atom structure "
-                "(probe_radius=%.2f, max_distance=%.2f, material_type=%r)",
-                len(positions),
-                float(probe_radius),
-                float(max_site_distance),
-                material_type,
+                "%s",
+                no_accessible_sites_message(
+                    len(positions),
+                    probe_radius=float(probe_radius),
+                    max_distance=float(max_site_distance),
+                    material_type=material_type,
+                ),
             )
             return empty_candidate_batch(early_empty=True)
 
