@@ -369,41 +369,45 @@ def _build_round_surrogate(
         and not state.disabled
         and enough_current
     )
-    if (can_try_refit or can_try_weighted) and transfer_memory is not None:
-        common_kwargs = {
-            "surrogate": require_transfer_capable_surrogate(config.bo.surrogate),
-            "n_estimators": config.bo.n_estimators,
-            "random_state": config.seed,
-            "n_jobs": config.n_jobs,
-            "weight_cap": transfer.weight_cap,
-            "proximity_lengthscale": transfer.proximity_lengthscale,
-            "mae_tolerance": transfer.mae_tolerance,
-            "transfer_bad_rounds": state.bad_rounds,
-            "trust_patience": transfer.trust_patience,
-        }
-        if can_try_refit:
-            transfer_result = build_cumulative_refit_surrogate(
-                X_current,
-                y_current,
-                transfer_memory.observed_X_rows,
-                transfer_memory.observed_y,
-                proximity_floor=transfer.proximity_floor,
-                **common_kwargs,
-            )
-            surrogate = _apply_transfer_result(state, transfer_result)
-        elif can_try_weighted:
-            transfer_result = build_transfer_surrogate(
-                X_current,
-                y_current,
-                transfer_memory.observed_X_rows,
-                transfer_memory.observed_y,
-                similarity_lengthscale=transfer.similarity_lengthscale,
-                min_similarity=transfer.min_similarity,
-                prior_step_ages=transfer_memory.step_ages,
-                recency_lengthscale=transfer.recency_lengthscale,
-                **common_kwargs,
-            )
-            surrogate = _apply_transfer_result(state, transfer_result)
+    if can_try_refit and transfer_memory is not None:
+        transfer_result = build_cumulative_refit_surrogate(
+            X_current,
+            y_current,
+            transfer_memory.observed_X_rows,
+            transfer_memory.observed_y,
+            surrogate=require_transfer_capable_surrogate(config.bo.surrogate),
+            n_estimators=config.bo.n_estimators,
+            random_state=config.seed,
+            n_jobs=config.n_jobs,
+            weight_cap=transfer.weight_cap,
+            proximity_lengthscale=transfer.proximity_lengthscale,
+            proximity_floor=transfer.proximity_floor,
+            mae_tolerance=transfer.mae_tolerance,
+            transfer_bad_rounds=state.bad_rounds,
+            trust_patience=transfer.trust_patience,
+        )
+        surrogate = _apply_transfer_result(state, transfer_result)
+    elif can_try_weighted and transfer_memory is not None:
+        transfer_result = build_transfer_surrogate(
+            X_current,
+            y_current,
+            transfer_memory.observed_X_rows,
+            transfer_memory.observed_y,
+            surrogate=require_transfer_capable_surrogate(config.bo.surrogate),
+            n_estimators=config.bo.n_estimators,
+            random_state=config.seed,
+            n_jobs=config.n_jobs,
+            weight_cap=transfer.weight_cap,
+            similarity_lengthscale=transfer.similarity_lengthscale,
+            min_similarity=transfer.min_similarity,
+            mae_tolerance=transfer.mae_tolerance,
+            transfer_bad_rounds=state.bad_rounds,
+            trust_patience=transfer.trust_patience,
+            proximity_lengthscale=transfer.proximity_lengthscale,
+            prior_step_ages=transfer_memory.step_ages,
+            recency_lengthscale=transfer.recency_lengthscale,
+        )
+        surrogate = _apply_transfer_result(state, transfer_result)
 
     transfer_active = (can_try_refit or can_try_weighted) and not state.disabled
     if surrogate is None:

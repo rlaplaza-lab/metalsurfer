@@ -184,7 +184,7 @@ class TestCalculateReferenceEnergies:
         # create_conformers_from_smiles returns None.
         _patch_reference_helpers(monkeypatch, conformers=None)
 
-        with pytest.raises(RuntimeError, match="conformers"):
+        with pytest.raises(RuntimeError, match="Could not create water from SMILES"):
             reference.calculate_reference_energies(
                 slab,
                 calc,

@@ -770,7 +770,7 @@ class TestProcessMolecule:
 
 @pytest.mark.parametrize("clamp_enabled", [True, False])
 def test_bo_batches_reuse_upfront_capacity_for_clamping(monkeypatch, clamp_enabled):
-    from metalsurfer.workflow import core as core_mod
+    from metalsurfer.workflow import bayesian as bayesian_mod
 
     slab = Substrate(make_slab(), material_type="slab")
     refs = ReferenceEnergies(slab_energy=-200.0, molecule_energies={"water": -10.0})
@@ -850,7 +850,7 @@ def test_bo_batches_reuse_upfront_capacity_for_clamping(monkeypatch, clamp_enabl
             0,
         )
 
-    original_materialize = core_mod.materialize_specs
+    original_materialize = bayesian_mod.materialize_specs
 
     def record_materialize(*args, **kwargs):
         materialize_capacities.append(kwargs.get("capacity"))
@@ -889,14 +889,14 @@ def test_bo_batches_reuse_upfront_capacity_for_clamping(monkeypatch, clamp_enabl
         materialize_all,
     )
     monkeypatch.setattr(
-        "metalsurfer.workflow.core._optimize_and_evaluate_placements",
+        "metalsurfer.workflow.bayesian._optimize_and_evaluate_placements",
         optimize_all,
     )
     monkeypatch.setattr(
         "metalsurfer.workflow.shared.filter_results",
         lambda results, **_kwargs: results,
     )
-    monkeypatch.setattr(core_mod, "materialize_specs", record_materialize)
+    monkeypatch.setattr(bayesian_mod, "materialize_specs", record_materialize)
 
     outcome = process_molecule_bayesian(
         "O",
