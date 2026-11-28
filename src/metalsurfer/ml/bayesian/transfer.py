@@ -9,7 +9,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from scipy.spatial.distance import cdist
-from sklearn.model_selection import KFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -26,8 +25,8 @@ from ..._numeric_defaults import (
 from ...config import require_transfer_capable_surrogate
 from ...placement._constants import _DISTANCE_ZERO_EPS
 from .surrogate import (
-    _RESIDUAL_OOF_MAX_FOLDS,
     _RESIDUAL_OOF_MIN_SAMPLES,
+    _residual_oof_kfold,
     train_surrogate,
 )
 from .types import SurrogateType, TransferCapableSurrogateType
@@ -299,8 +298,7 @@ def _transfer_trust_gate(
         base_mae = float(np.mean(np.abs(base.predict(X_current) - y_current)))
         return base_mae, base_mae, None, False
 
-    n_splits = min(_RESIDUAL_OOF_MAX_FOLDS, n_current)
-    cv = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    cv = _residual_oof_kfold(n_current, random_state)
     base_pred = np.empty(n_current, dtype=float)
     transfer_pred = np.empty(n_current, dtype=float)
     try:

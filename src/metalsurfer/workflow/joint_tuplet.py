@@ -19,7 +19,7 @@ from typing import Literal
 import numpy as np
 from ase import Atoms
 
-from .._messages import missing_reference_energy, num_placements_must_be_set
+from .._messages import missing_reference_energy
 from ..config import AdsorptionConfig
 from ..ml.features import extract_features
 from ..ml.schema import PlacementRecord
@@ -58,6 +58,7 @@ from .shared import (
     _prepare_molecule_screening,
     adsorption_ranking_energy,
     joint_config_ranking_energy,
+    require_num_placements,
     require_saturation_activity,
 )
 
@@ -200,7 +201,7 @@ def commit_best_joint_config(
             pressure=pressure,
         )
 
-    best_group = list(sorted(valid_configs, key=_rank)[0])
+    best_group = list(min(valid_configs, key=_rank))
     pool_best = min(
         best_group,
         key=lambda r: (
@@ -345,8 +346,7 @@ def screen_joint_tuplet_homogeneous(
     log_prefix: str = "",
 ) -> JointTupletScreenOutcome:
     """CPU placement + batched joint relaxation for one adsorbate species."""
-    if config.num_placements is None:
-        raise ValueError(num_placements_must_be_set())
+    require_num_placements(config)
     if ref_step.get_molecule_energy(molecule_name) is None:
         raise ValueError(missing_reference_energy(molecule_name))
 
@@ -413,9 +413,7 @@ def screen_joint_tuplet_multi(
         full_slab=current_slab.atoms,
     )
     n = config.saturation_molecules_per_step
-    n_configs = config.num_placements
-    if n_configs is None:
-        raise ValueError(num_placements_must_be_set())
+    n_configs = require_num_placements(config)
 
     compositions = enumerate_tuplet_compositions(active_molecules, n)
     if not compositions:
@@ -770,8 +768,7 @@ def process_joint_tuplet_bayesian(
 
     if config.bo.initial_random is None or config.bo.batch_size is None:
         raise ValueError("bo.initial_random and bo.batch_size required for joint BO")
-    if config.num_placements is None:
-        raise ValueError(num_placements_must_be_set("for joint BO"))
+    require_num_placements(config, "for joint BO")
 
     stage = _prepare_bo_pool_stage(
         conformers=conformers,

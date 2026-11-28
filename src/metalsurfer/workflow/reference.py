@@ -7,8 +7,12 @@ import numpy as np
 from ase import Atoms
 
 from .._logging import warn_once
+from .._messages import (
+    could_not_create_from_smiles,
+    failed_to_optimise_conformers,
+)
 from ..config import AdsorptionConfig
-from ..conformers import create_conformers_from_smiles
+from ..conformers import create_conformers_from_smiles, is_single_atom_pack
 from ..exceptions import OptimizationError
 from ..models import ReferenceEnergies
 from ..optimization import (
@@ -129,13 +133,11 @@ def calculate_reference_energies(
         )
         if result is None:
             if config.fail_on_conformer_failure:
-                raise OptimizationError(
-                    f"Could not create conformers for {mol_name} from SMILES: {smiles}"
-                )
-            logger.warning("Could not create %s from SMILES: %s", mol_name, smiles)
+                raise OptimizationError(could_not_create_from_smiles(mol_name, smiles))
+            logger.warning("%s", could_not_create_from_smiles(mol_name, smiles))
             continue
         conformers, conformer_energies = result
-        if conformers and len(conformers[0]) == 1:
+        if is_single_atom_pack(conformers):
             atoms0 = conformers[0]
             z = int(atoms0.get_atomic_numbers()[0])
             energy = _lookup_atom_ref(
@@ -170,10 +172,8 @@ def calculate_reference_energies(
         )
         if not opt_results:
             if config.fail_on_conformer_failure:
-                raise OptimizationError(
-                    f"Failed to optimise any conformers for {mol_name}"
-                )
-            logger.warning("Failed to optimise any conformers for %s", mol_name)
+                raise OptimizationError(failed_to_optimise_conformers(mol_name))
+            logger.warning("%s", failed_to_optimise_conformers(mol_name))
             continue
         best_e, best_i = min(
             ((e, i) for i, (_, e) in enumerate(opt_results)),

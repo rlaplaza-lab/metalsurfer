@@ -241,6 +241,8 @@ def _get_inflight_autobatcher(
             if cached is not None:
                 return cached, key
             if saturation_reuse:
+                # Indices 0–3,5 only; [4] uses growth window, [6] probe-cap varies
+                # with n_systems and is omitted by design (OOM retry is backstop).
                 matching_candidates: list[tuple[tuple, Any]] = []
                 for cache_key, cache_ab in _AUTOBATCHER_CACHE.items():
                     if (

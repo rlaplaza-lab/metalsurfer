@@ -49,6 +49,7 @@ from ._numeric_defaults import (
 )
 from ._version import __version__
 from .models import PlacementSpec
+from .reporting import BO_FAILURE_PENALTY_STAGES, FailureStage
 from .site_plugin_ids import (
     PLUGIN_ALLOWED_MATERIALS as _SITE_GENERATOR_ALLOWED_MATERIALS,
 )
@@ -121,12 +122,16 @@ SLAB_RELAXATION_OPTIMIZER_OPTIONS: tuple[str, ...] = _choice_options(
     SLAB_RELAXATION_OPTIMIZER
 )
 
-_DEFAULT_BO_FAILURE_PENALTY_OVERRIDES: dict[str, float] = {
+_BO_FAILURE_PENALTY_DEFAULTS: dict[FailureStage, float] = {
     "generation": 18.0,
     "optimization": 20.0,
     "validation": 14.0,
     "energy_cap": 12.0,
     "filter": 11.0,
+}
+
+_DEFAULT_BO_FAILURE_PENALTY_OVERRIDES: dict[str, float] = {
+    stage: _BO_FAILURE_PENALTY_DEFAULTS[stage] for stage in BO_FAILURE_PENALTY_STAGES
 }
 
 

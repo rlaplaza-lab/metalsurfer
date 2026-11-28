@@ -7,7 +7,7 @@ import os
 import sys
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from typing import Any, TypeGuard
 
 _LOG_CTX: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
@@ -90,12 +90,15 @@ def _ctx_prefix_from_context() -> str:
 
 
 def _install_log_record_factory() -> None:
-    """Ensure every LogRecord always has ctx_prefix."""
+    """Ensure every LogRecord always has ctx_prefix; re-wrap if replaced."""
     global _FACTORY_INSTALLED
-    if _FACTORY_INSTALLED:
+    current = logging.getLogRecordFactory()
+    if _FACTORY_INSTALLED and getattr(
+        current, "_metalsurfer_ctx_prefix_factory", False
+    ):
         return
 
-    old_factory = logging.getLogRecordFactory()
+    old_factory = current
 
     def record_factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
         """Create a log record with ctx_prefix set.
@@ -117,6 +120,7 @@ def _install_log_record_factory() -> None:
             record.ctx_prefix = _ctx_prefix_from_context()
         return record
 
+    record_factory._metalsurfer_ctx_prefix_factory = True  # type: ignore[attr-defined]
     logging.setLogRecordFactory(record_factory)
     _FACTORY_INSTALLED = True
 
@@ -124,6 +128,12 @@ def _install_log_record_factory() -> None:
 def ensure_log_record_defaults() -> None:
     """Ensure LogRecords include required contextual fields."""
     _install_log_record_factory()
+
+
+def reset_warned_once() -> None:
+    """Clear process-wide ``warn_once`` keys (for tests)."""
+    with _warned_once_lock:
+        _warned_once.clear()
 
 
 class _LogStreamToLogger(io.TextIOBase):
@@ -417,14 +427,12 @@ def torchsim_output_capture(
         sys.stderr = err_stream
         yield
     finally:
-        try:
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
+        with suppress(Exception):
             out_stream.flush()
-        finally:
-            sys.stdout = old_stdout
-        try:
+        with suppress(Exception):
             err_stream.flush()
-        finally:
-            sys.stderr = old_stderr
 
 
 # Install record defaults at import time so early log emissions are safe

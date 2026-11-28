@@ -221,6 +221,12 @@ _RESIDUAL_OOF_MIN_SAMPLES = 4
 _RESIDUAL_OOF_MAX_FOLDS = 3
 
 
+def _residual_oof_kfold(n: int, random_state: int) -> KFold:
+    """Shuffled K-fold splitter capped for residual out-of-fold estimation."""
+    n_splits = min(_RESIDUAL_OOF_MAX_FOLDS, n)
+    return KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+
+
 def _median_nn_lengthscale(points: np.ndarray, *, use_kdtree: bool = False) -> float:
     """Median 1-NN separation; ``1.0`` if fewer than two rows."""
     arr = np.asarray(points, dtype=float)
@@ -262,8 +268,7 @@ def _out_of_fold_residual_std(
     n = int(y_arr.size)
     if n < _RESIDUAL_OOF_MIN_SAMPLES:
         return None
-    n_splits = min(_RESIDUAL_OOF_MAX_FOLDS, n)
-    cv = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    cv = _residual_oof_kfold(n, random_state)
     try:
         oof = cross_val_predict(clone(pipeline), X, y_arr, cv=cv)
     except (ValueError, RuntimeError) as exc:

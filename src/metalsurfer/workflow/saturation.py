@@ -10,7 +10,7 @@ from typing import Any, Literal, NamedTuple
 from ase import Atoms
 
 from .._logging import log_context, log_prefix_context
-from .._messages import could_not_generate_conformers, num_placements_must_be_set
+from .._messages import could_not_generate_conformers
 from ..config import AdsorptionConfig
 from ..conformers import create_conformers_from_smiles
 from ..filters import adsorbate_connected_components
@@ -56,12 +56,13 @@ from .shared import (
     _missing_molecule_reference,
     _normalize_molecules_input,
     adsorption_ranking_energy,
-    empty_molecule_input_message,
     joint_config_ranking_energy,
     needs_workload_autotune,
+    require_num_placements,
     require_saturation_activity,
     resolve_saturation_activities,
     resolve_saturation_step_workload_config,
+    warn_empty_molecule_worklist,
 )
 
 logger = logging.getLogger(__name__)
@@ -1216,7 +1217,8 @@ def _run_multi_molecule_saturation(
         )
         if pack is None:
             logger.warning(
-                "Multi-mol saturation: could not generate conformers for %s; skipping this molecule",
+                "Multi-mol saturation: could not generate conformers for %s; "
+                "skipping this molecule",
                 mol,
             )
             _record_saturation_failure(
@@ -1310,9 +1312,7 @@ def _run_multi_molecule_saturation(
             full_slab=slab.atoms,
         )
 
-        num_placements = step_config.num_placements
-        if num_placements is None:
-            raise ValueError(num_placements_must_be_set("before saturation steps"))
+        num_placements = require_num_placements(step_config, "before saturation steps")
 
         per_molecule_results: dict[str, list[ScreeningResult]] = {
             mol: [] for mol in active_molecules
@@ -1636,9 +1636,7 @@ def run_saturation_screening(
             listed_csv = (
                 results_dir_for(surface_type) / SATURATION_SUMMARY_CSV
             ).as_posix()
-            msg = empty_molecule_input_message(load_status, listed_csv=listed_csv)
-            if msg is not None:
-                logger.warning(msg)
+            warn_empty_molecule_worklist(load_status, listed_csv=listed_csv)
             return []
 
         bootstrap = _bootstrap_screening_run(substrate, molecule_pairs, config)

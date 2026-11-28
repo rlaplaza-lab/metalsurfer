@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 from ase import Atoms
 
-from .._logging import torchsim_output_capture
+from .._logging import log_prefix_context, torchsim_output_capture
 from .._numeric_defaults import (
     DEFAULT_DEVICE,
     DEFAULT_DISPERSION,
@@ -96,16 +96,16 @@ def _setup_inflight_autobatcher(
         n_systems=len(systems),
         config=config,
     )
-    logger.info(
-        "%s cap=%d (source=%s, max_n_atoms=%d, n_systems=%d, multiplier=%.2f, bucket=%d)",
-        log_prefix,
-        resolved_max_atoms_to_try,
-        cap_source,
-        max_n_atoms,
-        len(systems),
-        _DYNAMIC_AUTOBATCHER_CAP_MULTIPLIER,
-        _DYNAMIC_AUTOBATCHER_CAP_BUCKET,
-    )
+    with log_prefix_context(log_prefix):
+        logger.info(
+            "cap=%d (source=%s, max_n_atoms=%d, n_systems=%d, multiplier=%.2f, bucket=%d)",
+            resolved_max_atoms_to_try,
+            cap_source,
+            max_n_atoms,
+            len(systems),
+            _DYNAMIC_AUTOBATCHER_CAP_MULTIPLIER,
+            _DYNAMIC_AUTOBATCHER_CAP_BUCKET,
+        )
     ab: Any = None
     cache_key: tuple | None = None
     if fetch:
@@ -268,17 +268,20 @@ def _run_optimize_with_oom_retry(
     """
     systems = build_systems()
     retry_exc: Exception | None = None
+    retry_exc_msg = ""
     try:
         return run_optimize(initial_autobatcher, systems)
     except RuntimeError as exc:
         if not _is_cuda_oom_error(exc):
             raise
+        retry_exc_msg = str(exc)
         retry_exc = exc.with_traceback(None)
     except ValueError as exc:
         if not _is_batcher_capacity_error(exc):
             raise
         # Drop the traceback: its frames reference the states handed to
         # the optimizer and would otherwise pin them for the whole retry.
+        retry_exc_msg = str(exc)
         retry_exc = exc.with_traceback(None)
     del systems
     gc.collect()
@@ -286,10 +289,11 @@ def _run_optimize_with_oom_retry(
         pop_autobatcher(cache_key)
     _maybe_clear_cuda_cache(ts_model)
     logger.warning(
-        "GPU capacity failure during %s (%s); dropped autobatcher cache "
+        "GPU capacity failure during %s (%s: %s); dropped autobatcher cache "
         "entry, cleared memory scaler, rebuilding systems and retrying once",
         context,
         type(retry_exc).__name__,
+        retry_exc_msg[:500],
     )
     # TorchSim's auto-probe sets max_memory_scaler = n_systems * metric * 0.8,
     # which is BELOW the metric of a single system when only one system fits
@@ -686,7 +690,8 @@ def _forces_for_optimized_systems(
             require_energy=False,
         )
     except (RuntimeError, MemoryError, OSError):
-        logger.warning("ts.static force recovery failed", exc_info=True)
+        logger.warning("ts.static force recovery failed")
+        logger.debug("ts.static force recovery traceback", exc_info=True)
         return [None] * n_systems
 
     per_system = [forces for _energy, forces in recovered]

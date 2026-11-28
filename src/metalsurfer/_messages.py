@@ -7,8 +7,15 @@ SKIP_DESORPTION_CHECK_WARNING = (
     "skip_desorption_check=True: desorption distance checks disabled; "
     "results may include desorbed structures"
 )
+SKIP_TOPOLOGY_CHECK_WARNING = (
+    "skip_topology_check=True: decomposition checks disabled; "
+    "results may include decomposed/rearranged structures"
+)
 UNREADABLE_EXISTING_FILE_WARNING = (
     "Could not read existing %s (%s); it will be replaced"
+)
+EXISTING_CSV_MISSING_KEY_COL_WARNING = (
+    "Existing %s has no %r column; it will be replaced"
 )
 
 
@@ -28,6 +35,14 @@ def num_placements_must_be_set(suffix: str = "") -> str:
 
 def could_not_generate_conformers(molecule_name: str) -> str:
     return f"could not generate conformers for {molecule_name}"
+
+
+def could_not_create_from_smiles(molecule_name: str, smiles: str) -> str:
+    return f"Could not create {molecule_name} from SMILES: {smiles}"
+
+
+def failed_to_optimise_conformers(molecule_name: str) -> str:
+    return f"Failed to optimise any conformers for {molecule_name}"
 
 
 def _format_optional_distance(value: float | None) -> str:

@@ -492,6 +492,7 @@ def inject_atop_sites(
     atom_indices: list[tuple[int, ...]] | None = None,
     normals: np.ndarray | None = None,
     clearances: np.ndarray | None = None,
+    hull: object | None = None,
 ) -> tuple[
     np.ndarray,
     np.ndarray,
@@ -538,7 +539,8 @@ def inject_atop_sites(
         top_atom_indices = np.asarray(slab_top_atom_indices, dtype=int)
         atom_normals = None
     elif material_type == "nanoparticle":
-        hull = _try_convex_hull(positions)
+        if hull is None:
+            hull = _try_convex_hull(positions)
         if hull is None:
             return vertices, nn_dists, source_hints, atoms, normals, clearances
         top_atom_indices = np.nonzero(_convex_hull_surface_mask(positions, hull=hull))[

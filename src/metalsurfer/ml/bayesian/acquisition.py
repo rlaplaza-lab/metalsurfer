@@ -573,8 +573,8 @@ def score_and_select(
     if uneval_sigma_scale is not None:
         if uneval_sigma_scale.shape[0] != sigma.shape[0]:
             raise ValueError(
-                f"sigma_scale length ({len(np.asarray(sigma_scale).ravel())}) must "
-                f"match candidates ({n_pool})"
+                f"sigma_scale length ({uneval_sigma_scale.shape[0]}) must "
+                f"match unevaluated candidates ({sigma.shape[0]})"
             )
         sigma = sigma * uneval_sigma_scale
     if acquisition == "lcb":

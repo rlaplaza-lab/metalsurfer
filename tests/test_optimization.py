@@ -1646,6 +1646,44 @@ def test_get_inflight_autobatcher_non_saturation_uses_exact_size_key(stub_autoba
     assert key2 != key1
 
 
+def test_get_inflight_autobatcher_saturation_reuse_ignores_probe_cap_key(
+    stub_autobatcher,
+):
+    """Saturation fuzzy match ignores key[6]; re-key stores the new cap.
+
+    Probe cap only bounds construction-time GPU probing. BO/saturation steps
+    often change n_systems (and thus resolved max_atoms_to_try) without
+    invalidating an existing batcher's admitted capacity.
+    """
+    _ = stub_autobatcher
+    model = type("MockModel", (), {"device": "cpu"})()
+    config = AdsorptionConfig(
+        device="cpu",
+        saturation_autobatcher_reuse_growth_atoms=8,
+        saturation_autobatcher_reuse_growth_fraction=0.0,
+    )
+    ab1, key1 = _cache._get_inflight_autobatcher(
+        model,
+        100,
+        config=config,
+        max_atoms_to_try=5_000,
+        saturation_reuse=True,
+    )
+    ab2, key2 = _cache._get_inflight_autobatcher(
+        model,
+        105,
+        config=config,
+        max_atoms_to_try=15_000,
+        saturation_reuse=True,
+    )
+    assert ab1 is not None
+    assert ab2 is ab1
+    assert int(key1[6]) == 5_000
+    assert int(key2[6]) == 15_000
+    assert key2[4] == 105
+    assert _cache._AUTOBATCHER_CACHE.get(key2) is ab1
+
+
 def test_get_inflight_autobatcher_uses_explicit_probe_cap(stub_autobatcher):
     _ = stub_autobatcher
     model = type("MockModel", (), {"device": "cpu"})()

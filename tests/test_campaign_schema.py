@@ -42,6 +42,19 @@ def test_load_campaign_yaml_empty_file(tmp_path):
         load_campaign_yaml(empty)
 
 
+def test_load_campaign_yaml_malformed(tmp_path):
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("campaign: [\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Could not read campaign file"):
+        load_campaign_yaml(bad)
+
+
+def test_load_campaign_yaml_unreadable_directory(tmp_path):
+    # Path is a directory → IsADirectoryError (OSError subclass).
+    with pytest.raises(ValueError, match="Could not read campaign file"):
+        load_campaign_yaml(tmp_path)
+
+
 def test_parse_campaign_rejects_unknown_substrate_key():
     with pytest.raises(ValueError, match="unknown keys"):
         parse_campaign_dict(

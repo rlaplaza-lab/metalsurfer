@@ -31,6 +31,7 @@ def missing_torch_sim(feature: str) -> DependencyMissingError:
 try:
     import torch as _torch_mod
 except ImportError:  # pragma: no cover - depends on the optional MLIP stack
+    logger.debug("torch optional import unavailable", exc_info=True)
     torch: Any = None
 else:  # pragma: no cover - depends on the optional MLIP stack
     torch = _torch_mod

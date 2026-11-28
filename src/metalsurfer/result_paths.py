@@ -15,9 +15,7 @@ SATURATION_PLACEMENTS_DETAILED_CSV = "saturation_placements_detailed.csv"
 
 def results_dir_or_manual(surface_type: str | None) -> str:
     """Return ``results_{surface_type}``, or ``results_manual`` when unset."""
-    if surface_type:
-        return str(results_dir_for(surface_type))
-    return "results_manual"
+    return str(results_dir_for(surface_type or "manual"))
 
 
 def results_dir_for(surface_type: str) -> Path:

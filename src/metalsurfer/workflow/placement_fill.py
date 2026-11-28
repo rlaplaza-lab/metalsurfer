@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 
 from ase import Atoms
 
-from .._messages import num_placements_must_be_set
 from ..config import AdsorptionConfig
 from ..models import PlacementDescriptor, PlacementSpec
 from ..placement.generators import (
@@ -24,7 +23,11 @@ from ..placement.spec_height_policy import (
     _height_interval_family_key,
     _same_height_key,
 )
-from .shared import PlacementFailureEvent, _materialize_spec_placements
+from .shared import (
+    PlacementFailureEvent,
+    _materialize_spec_placements,
+    require_num_placements,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -355,9 +358,7 @@ def fill_materialized_placements(
     ``z_fraction`` siblings after ``too_close`` / ``vdw_overlap`` (wall
     fractions on the contact shell share that COM; higher fractions stay).
     """
-    n_target = config.num_placements
-    if n_target is None:
-        raise ValueError(num_placements_must_be_set("before materializing placements"))
+    n_target = require_num_placements(config, "before materializing placements")
 
     grid_info = _spec_grid_info(
         conformers,

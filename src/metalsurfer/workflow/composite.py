@@ -27,6 +27,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 from ase import Atoms
 
+from .._logging import log_prefix_context
 from ..config import AdsorptionConfig
 from ..filters import adsorbates_mutually_disconnected
 from ..models import ScreeningResult
@@ -886,7 +887,6 @@ def _validate_relaxed_composite(
     config: AdsorptionConfig,
     material_type: str,
     topology_check: Callable[[Atoms, list[str]], tuple[bool, str]] | None,
-    log_prefix: str,
 ) -> tuple[list[float], str]:
     """Return per-unit surface distances or ``([], reason)`` on failure."""
     ok, reason = check_frozen_substrate_displacement(
@@ -895,14 +895,14 @@ def _validate_relaxed_composite(
         slab_size=len(base_slab),
     )
     if not ok:
-        logger.warning("%scomposite frozen substrate drift: %s", log_prefix, reason)
+        logger.warning("composite frozen substrate drift: %s", reason)
         return [], f"frozen_drift: {reason}"
 
     ok, reason = _validate_geometry(
         opt_atoms, slab_atoms, config, material_type=material_type
     )
     if not ok:
-        logger.debug("%scomposite geometry fail: %s", log_prefix, reason)
+        logger.debug("composite geometry fail: %s", reason)
         return [], f"geometry: {reason}"
 
     unit_distances = _per_unit_surface_distances(
@@ -916,8 +916,7 @@ def _validate_relaxed_composite(
         for k, dist in enumerate(unit_distances):
             if dist > config.binding_distance_threshold:
                 logger.debug(
-                    "%scomposite unit %d (%s) desorbed: %.2f A",
-                    log_prefix,
+                    "composite unit %d (%s) desorbed: %.2f A",
                     k,
                     winners[k].molecule,
                     dist,
@@ -929,9 +928,7 @@ def _validate_relaxed_composite(
     if topology_check is not None:
         ok, reason = topology_check(opt_atoms, [w.molecule for w in winners])
         if not ok:
-            logger.debug(
-                "%scomposite topology rearrangement guard: %s", log_prefix, reason
-            )
+            logger.debug("composite topology rearrangement guard: %s", reason)
             return [], f"topology: {reason}"
 
     return unit_distances, ""
@@ -947,7 +944,6 @@ def _finalize_relaxed_composite(
     material_type: str,
     E_slab: float,
     topology_check: Callable[[Atoms, list[str]], tuple[bool, str]] | None,
-    log_prefix: str,
 ) -> tuple[list[ScreeningResult], str]:
     """Validate + rewrite one relaxed composite; ``([], reason)`` on failure."""
     if opt_atoms is None:
@@ -960,7 +956,6 @@ def _finalize_relaxed_composite(
         config=config,
         material_type=material_type,
         topology_check=topology_check,
-        log_prefix=log_prefix,
     )
     if failure:
         return [], failure
@@ -975,8 +970,7 @@ def _finalize_relaxed_composite(
     if e_ads_per_mol > config.max_adsorption_energy:
         return [], f"energy_cap: E_ads per molecule too high: {e_ads_per_mol:.4f} eV"
     logger.info(
-        "%scomposite relaxed: %d units, E_ads/mol = %.4f eV (total %.4f eV)",
-        log_prefix,
+        "composite relaxed: %d units, E_ads/mol = %.4f eV (total %.4f eV)",
         len(rewritten),
         e_ads_per_mol,
         e_ads_total,
@@ -1021,20 +1015,20 @@ def evaluate_composite_batch(
     )
     valid: list[list[ScreeningResult]] = []
     failures: list[str] = []
-    for group, opt_atoms in zip(config_groups, optimized, strict=True):
-        rewritten, failure = _finalize_relaxed_composite(
-            group,
-            opt_atoms,
-            slab_atoms=slab_atoms,
-            base_slab=base_slab,
-            config=config,
-            material_type=material_type,
-            E_slab=E_slab,
-            topology_check=topology_check,
-            log_prefix=log_prefix,
-        )
-        if rewritten:
-            valid.append(rewritten)
-        elif failure:
-            failures.append(failure)
+    with log_prefix_context(log_prefix):
+        for group, opt_atoms in zip(config_groups, optimized, strict=True):
+            rewritten, failure = _finalize_relaxed_composite(
+                group,
+                opt_atoms,
+                slab_atoms=slab_atoms,
+                base_slab=base_slab,
+                config=config,
+                material_type=material_type,
+                E_slab=E_slab,
+                topology_check=topology_check,
+            )
+            if rewritten:
+                valid.append(rewritten)
+            elif failure:
+                failures.append(failure)
     return CompositeBatchResult(valid=valid, failures=failures)

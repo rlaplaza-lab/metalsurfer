@@ -21,6 +21,7 @@ from ._geom_pbc import (
     cart_to_frac,
     frac_to_cart,
     minimum_image_cartesian_delta,
+    project_out_normal,
     slab_normal,
     wrap_fractional,
 )
@@ -248,7 +249,7 @@ class SymmetryAnalyzer:
         arr = np.asarray(sep, dtype=float)
         if planar:
             n = self._slab_normal()
-            arr = arr - (arr @ n)[..., None] * n
+            arr = project_out_normal(arr, n)
         return np.linalg.norm(arr, axis=-1)
 
     def _within_match_tolerance(self, sep: np.ndarray, planar: bool) -> np.ndarray:
@@ -417,7 +418,7 @@ class SymmetryAnalyzer:
         cart_ref_full = frac_to_cart(frac_pts, self._lattice)
         cart_ref = cart_ref_full
         if n_hat is not None:
-            cart_ref = cart_ref_full - (cart_ref_full @ n_hat)[..., None] * n_hat
+            cart_ref = project_out_normal(cart_ref_full, n_hat)
 
         if np.any(pbc) and cell_has_volume(self._lattice):
             offsets = self._periodic_image_offsets(pbc)
@@ -496,7 +497,7 @@ class SymmetryAnalyzer:
         cart_query = cart_query_full
         n_hat = self._slab_normal() if planar else None
         if n_hat is not None:
-            cart_query = cart_query_full - (cart_query_full @ n_hat)[..., None] * n_hat
+            cart_query = project_out_normal(cart_query_full, n_hat)
 
         hits = tree.query_ball_point(cart_query, r=tol)
         if kdtree_ctx.periodic:

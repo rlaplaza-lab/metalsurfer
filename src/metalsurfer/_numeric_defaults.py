@@ -71,6 +71,8 @@ ENERGY_DEDUP_THRESHOLD_DEFAULT_EV: float = 0.05
 # product (or an in-plane basis vector) is treated as degenerate and a
 # Cartesian fallback axis is used instead.
 SURFACE_NORMAL_FALLBACK_NORM_EPS: float = 1e-8
+# Surface-prep cell degeneracy; distinct from CELL_DET_EPS (1e-12 volume gate).
+SURFACE_CELL_GEOM_DET_EPS: float = 1e-8
 # Min vacuum gap (Å) by which -a×b must exceed +a×b to select the lower face.
 SLAB_VACUUM_FACE_MARGIN_ANG: float = 1.0
 ACQUISITION_XI_DEFAULT: float = 1e-6

@@ -36,7 +36,7 @@ from .workflow import (
 from .workflow.shared import (
     _bootstrap_screening_run,
     _normalize_molecules_input,
-    empty_molecule_input_message,
+    warn_empty_molecule_worklist,
 )
 
 logger = logging.getLogger(__name__)
@@ -119,9 +119,7 @@ def _run_binding_campaign(
         listed_csv = (
             results_dir_for(surface_type) / ADSORPTION_ENERGIES_DETAILED_CSV
         ).as_posix()
-        msg = empty_molecule_input_message(load_status, listed_csv=listed_csv)
-        if msg is not None:
-            logger.warning(msg)
+        warn_empty_molecule_worklist(load_status, listed_csv=listed_csv)
         return BindingCampaignResult(
             mode=mode,
             surface_type=surface_type,
@@ -194,6 +192,12 @@ def _run_binding_campaign(
             )
         total_configurations = sum(len(rr.results) for rr in run_results)
         t_total_s = time.perf_counter() - t_start
+        run_stats = {
+            "n_molecules": state["n_molecules"],
+            "total_configs": total_configurations,
+            "t_ref_s": state["t_ref_s"],
+            "t_total_s": t_total_s,
+        }
         if write_settings:
             _write_campaign_run_settings(
                 surface_type,
@@ -207,18 +211,10 @@ def _run_binding_campaign(
                 surface_type=surface_type,
                 config=config,
                 smiles_file=molecules_source,
-                n_molecules=state["n_molecules"],
-                total_configs=total_configurations,
-                t_ref_s=state["t_ref_s"],
-                t_total_s=t_total_s,
+                **run_stats,
             )
         if run_metadata_out is not None:
-            run_metadata_out.update(
-                n_molecules=state["n_molecules"],
-                total_configs=total_configurations,
-                t_ref_s=state["t_ref_s"],
-                t_total_s=t_total_s,
-            )
+            run_metadata_out.update(run_stats)
         return BindingCampaignResult(
             mode=mode,
             surface_type=surface_type,

@@ -18,6 +18,14 @@ FailureStage = Literal[
     "filter",
 ]
 
+BO_FAILURE_PENALTY_STAGES: tuple[FailureStage, ...] = (
+    "generation",
+    "optimization",
+    "validation",
+    "energy_cap",
+    "filter",
+)
+
 
 @dataclass(frozen=True)
 class ReferenceFailure:

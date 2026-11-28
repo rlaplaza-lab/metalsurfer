@@ -43,12 +43,7 @@ class TopologyNPGenerator:
         )
         topology_median_nn = float(metal_nn)
         site_height = _ATOP_INJECTION_HEIGHT_FACTOR * metal_nn
-        (
-            topo_vertices,
-            topo_dists,
-            topo_sources,
-            topo_atoms,
-        ) = _generate_nanoparticle_topology_sites(
+        topo = _generate_nanoparticle_topology_sites(
             positions,
             local_tree,
             site_height,
@@ -59,6 +54,10 @@ class TopologyNPGenerator:
             pbc=pbc,
             symbols=list(ctx.symbols),
         )
+        topo_vertices = topo.vertices
+        topo_dists = topo.nn_dists
+        topo_sources = topo.sources
+        topo_atoms = topo.atom_indices
         has_topology_atop = "topology_atop" in topo_sources
         atom_indices = list(topo_atoms)
         normals: np.ndarray | None
@@ -98,6 +97,7 @@ class TopologyNPGenerator:
             atom_indices=atom_indices,
             normals=normals,
             clearances=clearances,
+            hull=topo.hull,
         )
         return SiteCandidateBatch(
             vertices=topo_vertices,

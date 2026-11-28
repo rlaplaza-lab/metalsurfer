@@ -1,30 +1,24 @@
 """Conformer generation from SMILES via RDKit and deduplication."""
 
 import logging
-from typing import Any
 
 import numpy as np
 from ase import Atoms
 
 from ._logging import warn_once
-from ._messages import RDKIT_INSTALL_HINT
 from ._numeric_defaults import (
     ENERGY_DEDUP_THRESHOLD_DEFAULT_EV,
     RMSD_DEDUP_THRESHOLD_DEFAULT_ANGSTROM,
 )
-from ._rdkit import require_rdkit_chem
+from ._rdkit import require_rdkit_allchem, require_rdkit_chem
 from .config import AdsorptionConfig
-from .exceptions import DependencyMissingError
 
 logger = logging.getLogger(__name__)
 
-AllChem: Any = None
-try:
-    from rdkit.Chem import AllChem as _rdkit_allchem
 
-    AllChem = _rdkit_allchem
-except (ImportError, AttributeError):
-    logger.debug("RDKit AllChem optional import unavailable", exc_info=True)
+def is_single_atom_pack(conformers: list[Atoms]) -> bool:
+    """Return whether the pack is non-empty and the first conformer is a single atom."""
+    return bool(conformers) and len(conformers[0]) == 1
 
 
 def create_conformers_from_smiles(
@@ -55,12 +49,7 @@ def create_conformers_from_smiles(
         Optional TorchSim model for batched scoring.
     """
     Chem = require_rdkit_chem("create_conformers_from_smiles")
-    if AllChem is None:
-        raise DependencyMissingError(
-            "rdkit",
-            "create_conformers_from_smiles",
-            RDKIT_INSTALL_HINT,
-        )
+    AllChem = require_rdkit_allchem("create_conformers_from_smiles")
 
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
@@ -74,8 +63,7 @@ def create_conformers_from_smiles(
     )
     if len(conf_ids) == 0:
         logger.warning(
-            "Could not generate conformers for %s, trying single conformer",
-            smiles,
+            "Could not generate conformers for %s, trying single conformer", smiles
         )
         AllChem.EmbedMolecule(mol, randomSeed=config.seed)
         if mol.GetNumConformers() == 0:
@@ -95,7 +83,7 @@ def create_conformers_from_smiles(
     if mmff_unsupported:
         warn_once(
             logger,
-            f"mmff_unsupported:{smiles}",
+            "mmff_unsupported",
             "MMFF optimization failed for %d conformer(s) of %s "
             "(unsupported atom types; conf_ids=%s)",
             len(mmff_unsupported),
@@ -118,7 +106,7 @@ def create_conformers_from_smiles(
         score_model = getattr(calculator, "_model", None)
 
     # Lone atoms have no GNN edges; reference.py uses UMA atom_refs for E_mol.
-    score_single_atom = bool(conformers) and len(conformers[0]) == 1
+    score_single_atom = is_single_atom_pack(conformers)
     if score_model is not None and conformers and not score_single_atom:
         # Lazy: importing metalsurfer.optimization pulls torch via _deps.
         from .optimization import batch_static
@@ -170,10 +158,10 @@ def remove_duplicate_conformers(
     sorted_indices = np.argsort(energies)
     sorted_conformers = [conformers[i] for i in sorted_indices]
     sorted_energies = [energies[i] for i in sorted_indices]
-    centered = [
-        np.asarray(c.get_positions(), dtype=float) - np.mean(c.get_positions(), axis=0)
-        for c in sorted_conformers
-    ]
+    centered = []
+    for c in sorted_conformers:
+        pos = np.asarray(c.get_positions(), dtype=float)
+        centered.append(pos - pos.mean(axis=0))
 
     unique_conformers: list[Atoms] = []
     unique_energies: list[float] = []

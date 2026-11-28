@@ -152,3 +152,42 @@ def test_left_handed_cell_keeps_periodic_distances():
 
     d = calculate_min_distance(a, b, cell, use_pbc=True, pbc=[True, True, False])
     assert float(d) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_minimum_image_cartesian_delta_batched_tie_and_ase_parity():
+    """Batched MIC preserves product-order argmin ties and matches ASE find_mic."""
+    from ase.geometry import find_mic
+
+    from metalsurfer._geom_pbc import minimum_image_cartesian_delta
+
+    # Exact half-cell along a: images at ±a/2 tie; np.argmin keeps the lowest
+    # correction index among equal norms (deterministic vs ASE).
+    ortho = np.diag([4.0, 4.0, 10.0])
+    pbc = np.array([True, True, False])
+    half = np.array([2.0, 0.0, 0.0])
+    mic = minimum_image_cartesian_delta(half, ortho, pbc)
+    assert float(np.linalg.norm(mic)) == pytest.approx(2.0, abs=1e-9)
+    assert mic[0] == pytest.approx(2.0, abs=1e-9)
+
+    cell = np.array(
+        [[5.0, 0.0, 0.0], [4.5, 1.5, 0.0], [0.5, 0.5, 8.0]],
+        dtype=float,
+    )
+    pbc3 = np.array([True, True, True])
+    deltas = np.array(
+        [
+            [0.1, 0.1, 1.0] - np.array([4.8, 1.4, 1.0]),
+            [1.0, 0.5, 2.0] - np.array([0.2, 1.3, 2.0]),
+            [2.5, 0.0, 0.0],
+        ],
+        dtype=float,
+    )
+    batched = minimum_image_cartesian_delta(deltas, cell, pbc3)
+    ase_mic, _ = find_mic(deltas, cell, pbc=pbc3.tolist())
+    np.testing.assert_allclose(batched, ase_mic, atol=1e-8)
+
+    left = np.diag([6.0, 6.0, -20.0])
+    d_left = minimum_image_cartesian_delta(
+        np.array([5.0, 0.0, 0.0]), left, np.array([True, True, False])
+    )
+    assert float(np.linalg.norm(d_left)) == pytest.approx(1.0, abs=1e-6)

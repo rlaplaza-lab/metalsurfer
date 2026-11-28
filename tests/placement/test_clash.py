@@ -7,7 +7,7 @@ import pytest
 from ase import Atoms
 from ase.data import atomic_numbers, covalent_radii
 
-from metalsurfer._logging import _warned_once
+from metalsurfer._logging import reset_warned_once
 from metalsurfer.config import AdsorptionConfig
 from metalsurfer.placement import geometry as geom
 from metalsurfer.placement.clash import (
@@ -288,10 +288,7 @@ def test_atom_radii_for_symbols_fails_loud_on_unknown_symbol():
 def test_vdw_hole_is_interpolated_once(caplog):
     """Fe and Ru have no ASE van der Waals radius; fill within the period."""
     radius_for_symbol.cache_clear()
-    _warned_once.discard("radius-fill:vdw:Fe:interp")
-    _warned_once.discard("radius-fill:vdw:Ru:interp")
-    _warned_once.discard("radius-fill:vdw:Fe:anchor")
-    _warned_once.discard("radius-fill:vdw:Ru:anchor")
+    reset_warned_once()
     with caplog.at_level(logging.WARNING):
         assert radius_for_symbol("Fe", "vdw") == pytest.approx(1.80)
         assert radius_for_symbol("Ru", "vdw") == pytest.approx(1.845)

@@ -11,7 +11,6 @@ import pandas as pd
 from ase import Atoms
 from sklearn.preprocessing import StandardScaler
 
-from .._messages import num_placements_must_be_set
 from ..config import (
     AdsorptionConfig,
     require_transfer_capable_surrogate,
@@ -48,20 +47,94 @@ from ..reporting import (
     FailureSummary,
 )
 from ..surface_prep import Substrate
-from .core import _evaluate_placement_batch
+from .placement_fill import materialize_specs
 from .shared import (
     MoleculeScreenOutcome,
     PlacementFailureEvent,
     ScreeningPrepareRequest,
     _finalize_screen_results,
+    _optimize_and_evaluate_placements,
     _prepare_bo_pool_stage,
     _prepare_molecule_screening,
     _PreparedBOPool,
     _summarize_failure_events,
     _unique_relaxed_message,
+    require_num_placements,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _evaluate_placement_batch(
+    specs: list,
+    conformers: list[Atoms],
+    slab: Substrate,
+    calculator,
+    ts_model,
+    config: AdsorptionConfig,
+    smiles: str,
+    E_slab: float,
+    E_mol: float,
+    molecule_name: str,
+    site_context: SiteContext | None = None,
+    base_slab_for_frozen: Atoms | None = None,
+    slab_for_sites: Atoms | None = None,
+    materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] | None = None,
+    saturation_reuse: bool = False,
+    surface_prefix_atoms: int | None = None,
+    capacity: int | None = None,
+) -> tuple[list[ScreeningResult], list[PlacementFailureEvent]]:
+    """Run placement wrap + optimization + validation for a batch of specs.
+
+    BO callers pass a pre-validated pool; ``materialization_cache`` supplies
+    geometry-valid adsorbates so generation is a cache hit (no backfill).
+
+    Returns
+    -------
+    ``(results, failures)``
+    """
+    fill = materialize_specs(
+        specs=specs,
+        n_target=len(specs),
+        conformers=conformers,
+        slab_atoms=slab.atoms,
+        calculator=calculator,
+        config=config,
+        smiles=smiles,
+        site_context=site_context,
+        material_type=slab.material_type,
+        slab_for_sites=slab_for_sites,
+        materialization_cache=materialization_cache,
+        clamp_log_label=" (BO)",
+        capacity=capacity,
+    )
+    all_combined = fill.combined
+    placement_ids = fill.placement_ids
+    placement_descriptors = fill.descriptors
+    failures = list(fill.failures)
+
+    if not all_combined:
+        return [], failures
+
+    results, validation_failure_events, _n_optimization_failed = (
+        _optimize_and_evaluate_placements(
+            all_combined,
+            placement_ids,
+            placement_descriptors,
+            slab=slab.atoms,
+            ts_model=ts_model,
+            config=config,
+            material_type=slab.material_type,
+            energies=(E_slab, E_mol),
+            molecule_name=molecule_name,
+            base_slab_for_frozen=base_slab_for_frozen,
+            saturation_reuse=saturation_reuse,
+            log_prefix="BO batch ",
+            surface_prefix_atoms=surface_prefix_atoms,
+        )
+    )
+    failures.extend(validation_failure_events)
+    return results, failures
 
 
 def prepare_bo_pool(
@@ -296,45 +369,41 @@ def _build_round_surrogate(
         and not state.disabled
         and enough_current
     )
-    if can_try_refit and transfer_memory is not None:
-        transfer_result = build_cumulative_refit_surrogate(
-            X_current,
-            y_current,
-            transfer_memory.observed_X_rows,
-            transfer_memory.observed_y,
-            surrogate=require_transfer_capable_surrogate(config.bo.surrogate),
-            n_estimators=config.bo.n_estimators,
-            random_state=config.seed,
-            n_jobs=config.n_jobs,
-            weight_cap=transfer.weight_cap,
-            proximity_lengthscale=transfer.proximity_lengthscale,
-            proximity_floor=transfer.proximity_floor,
-            mae_tolerance=transfer.mae_tolerance,
-            transfer_bad_rounds=state.bad_rounds,
-            trust_patience=transfer.trust_patience,
-        )
-        surrogate = _apply_transfer_result(state, transfer_result)
-    elif can_try_weighted and transfer_memory is not None:
-        transfer_result = build_transfer_surrogate(
-            X_current,
-            y_current,
-            transfer_memory.observed_X_rows,
-            transfer_memory.observed_y,
-            surrogate=require_transfer_capable_surrogate(config.bo.surrogate),
-            n_estimators=config.bo.n_estimators,
-            random_state=config.seed,
-            n_jobs=config.n_jobs,
-            weight_cap=transfer.weight_cap,
-            similarity_lengthscale=transfer.similarity_lengthscale,
-            min_similarity=transfer.min_similarity,
-            mae_tolerance=transfer.mae_tolerance,
-            transfer_bad_rounds=state.bad_rounds,
-            trust_patience=transfer.trust_patience,
-            proximity_lengthscale=transfer.proximity_lengthscale,
-            prior_step_ages=transfer_memory.step_ages,
-            recency_lengthscale=transfer.recency_lengthscale,
-        )
-        surrogate = _apply_transfer_result(state, transfer_result)
+    if (can_try_refit or can_try_weighted) and transfer_memory is not None:
+        common_kwargs = {
+            "surrogate": require_transfer_capable_surrogate(config.bo.surrogate),
+            "n_estimators": config.bo.n_estimators,
+            "random_state": config.seed,
+            "n_jobs": config.n_jobs,
+            "weight_cap": transfer.weight_cap,
+            "proximity_lengthscale": transfer.proximity_lengthscale,
+            "mae_tolerance": transfer.mae_tolerance,
+            "transfer_bad_rounds": state.bad_rounds,
+            "trust_patience": transfer.trust_patience,
+        }
+        if can_try_refit:
+            transfer_result = build_cumulative_refit_surrogate(
+                X_current,
+                y_current,
+                transfer_memory.observed_X_rows,
+                transfer_memory.observed_y,
+                proximity_floor=transfer.proximity_floor,
+                **common_kwargs,
+            )
+            surrogate = _apply_transfer_result(state, transfer_result)
+        elif can_try_weighted:
+            transfer_result = build_transfer_surrogate(
+                X_current,
+                y_current,
+                transfer_memory.observed_X_rows,
+                transfer_memory.observed_y,
+                similarity_lengthscale=transfer.similarity_lengthscale,
+                min_similarity=transfer.min_similarity,
+                prior_step_ages=transfer_memory.step_ages,
+                recency_lengthscale=transfer.recency_lengthscale,
+                **common_kwargs,
+            )
+            surrogate = _apply_transfer_result(state, transfer_result)
 
     transfer_active = (can_try_refit or can_try_weighted) and not state.disabled
     if surrogate is None:
@@ -619,8 +688,7 @@ def process_molecule_bayesian(
         raise ValueError("config.bo.initial_random must be set for Bayesian screening")
     if config.bo.batch_size is None:
         raise ValueError("config.bo.batch_size must be set for Bayesian screening")
-    if config.num_placements is None:
-        raise ValueError(num_placements_must_be_set("for Bayesian screening"))
+    require_num_placements(config, "for Bayesian screening")
     bo_eval_budget = resolved_bo_eval_budget(config)
 
     stage = _prepare_bo_pool_stage(

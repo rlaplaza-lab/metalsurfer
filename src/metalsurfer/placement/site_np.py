@@ -37,6 +37,7 @@ class _NPTopologyResult(NamedTuple):
     nn_dists: np.ndarray
     sources: list[str]
     atom_indices: list[tuple[int, ...]]
+    hull: ConvexHull | None = None
 
 
 def _try_qhull[T](
@@ -171,6 +172,7 @@ def _generate_nanoparticle_topology_sites(
         np.empty(0, dtype=float),
         [],
         [],
+        None,
     )
     positions = np.asarray(positions, dtype=float)
     if len(positions) == 0:
@@ -184,7 +186,7 @@ def _generate_nanoparticle_topology_sites(
         int
     )
     if len(surf_idx) == 0:
-        return empty
+        return empty._replace(hull=hull)
 
     com = np.mean(positions, axis=0)
     hull_idx = np.asarray(surf_idx, dtype=int)
@@ -345,7 +347,7 @@ def _generate_nanoparticle_topology_sites(
                 )
 
     if not pending_pts:
-        return empty
+        return empty._replace(hull=hull)
 
     cand_arr = np.asarray(pending_pts, dtype=float)
     probe_arr = np.asarray(pending_probes, dtype=float)
@@ -353,7 +355,7 @@ def _generate_nanoparticle_topology_sites(
     dists = np.asarray(dists, dtype=float).ravel()
     keep_acc = (float(probe_radius) <= dists) & (dists <= float(max_distance))
     if not np.any(keep_acc):
-        return empty
+        return empty._replace(hull=hull)
     kept_acc = np.nonzero(keep_acc)[0]
     cand_arr = cand_arr[keep_acc]
     cand_dist = dists[keep_acc]
@@ -366,4 +368,5 @@ def _generate_nanoparticle_topology_sites(
         cand_dist[keep],
         [candidate_sources[i] for i in kept],
         [candidate_atoms[i] for i in kept],
+        hull,
     )

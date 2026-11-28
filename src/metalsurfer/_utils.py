@@ -6,7 +6,7 @@ from math import isfinite
 import numpy as np
 
 # |det| below this → no usable volume (PBC distances disabled). Not the
-# surface-prep geometric cutoff (_surfaces._CELL_DET_EPS = 1e-8).
+# Volume gate for MIC/PBC; surface-prep geometry uses SURFACE_CELL_GEOM_DET_EPS.
 CELL_DET_EPS: float = 1e-12
 
 

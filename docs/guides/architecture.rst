@@ -704,7 +704,8 @@ is used on CPU.
    * - ``stage1_steps`` + ``stage2_steps``
      - Two-stage FIRE/LBFGS budget (default FIRE)
    * - ``saturation_reuse`` / ``saturation_autobatcher_reuse``
-     - Reuse the batcher when the slab grows slightly (default 32 atoms / 10%)
+     - Reuse the batcher when the slab grows slightly (default 32 atoms / 10%);
+       probe-cap key is ignored (varies with ``n_systems``).
 
 Leaving ``num_placements`` (and BO batch fields) as ``None`` is intentional:
 the library sizes parallel work to GPU memory and fills

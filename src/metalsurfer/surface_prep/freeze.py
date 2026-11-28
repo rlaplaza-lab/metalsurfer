@@ -12,6 +12,7 @@ import numpy as np
 from ase import Atoms
 from ase.constraints import FixAtoms
 
+from .._logging import log_prefix_context
 from .._numeric_defaults import (
     DEFAULT_FROZEN_SUBSTRATE_DISPLACEMENT_TOL_ANG,
     DEFAULT_TOP_LAYER_TOLERANCE,
@@ -372,58 +373,55 @@ def log_substrate_freeze_policy(
     context
         Prefix string for log messages.
     """
-    n_substrate = len(substrate)
-    symbols = substrate.get_chemical_symbols()
-    frozen = frozen_indices_from_constraints(substrate)
-    overflow = [i for i in frozen if i < 0 or i >= n_substrate]
-    if overflow:
-        logger.warning(
-            "%s freeze policy: omitting %d FixAtoms index(es) outside this "
-            "%d-atom reference (max was %d)",
-            context,
-            len(overflow),
-            n_substrate,
-            max(overflow),
-        )
-        frozen = [i for i in frozen if 0 <= i < n_substrate]
-    frozen_set = set(frozen)
-    moving = [i for i in range(n_substrate) if i not in frozen_set]
+    with log_prefix_context(context):
+        n_substrate = len(substrate)
+        symbols = substrate.get_chemical_symbols()
+        frozen = frozen_indices_from_constraints(substrate)
+        overflow = [i for i in frozen if i < 0 or i >= n_substrate]
+        if overflow:
+            logger.warning(
+                "freeze policy: omitting %d FixAtoms index(es) outside this "
+                "%d-atom reference (max was %d)",
+                len(overflow),
+                n_substrate,
+                max(overflow),
+            )
+            frozen = [i for i in frozen if 0 <= i < n_substrate]
+        frozen_set = set(frozen)
+        moving = [i for i in range(n_substrate) if i not in frozen_set]
 
-    if not frozen:
-        logger.info(
-            "%s freeze policy: no FixAtoms on %d substrate atoms — all substrate "
-            "atoms free to move during placement relaxation",
-            context,
-            n_substrate,
-        )
-        return
+        if not frozen:
+            logger.info(
+                "freeze policy: no FixAtoms on %d substrate atoms — all substrate "
+                "atoms free to move during placement relaxation",
+                n_substrate,
+            )
+            return
 
-    if not moving:
+        if not moving:
+            logger.info(
+                "freeze policy: all %d substrate atoms frozen during placement "
+                "relaxation (%s; indices %s)",
+                n_substrate,
+                _symbol_count_label(frozen, symbols),
+                format_atom_index_ranges(frozen),
+            )
+            return
+
         logger.info(
-            "%s freeze policy: all %d substrate atoms frozen during placement "
-            "relaxation (%s; indices %s)",
-            context,
+            "freeze policy: %d/%d substrate atoms frozen, %d free to move during "
+            "placement relaxation",
+            len(frozen),
             n_substrate,
+            len(moving),
+        )
+        logger.info(
+            "  frozen (%s): indices %s",
             _symbol_count_label(frozen, symbols),
             format_atom_index_ranges(frozen),
         )
-        return
-
-    logger.info(
-        "%s freeze policy: %d/%d substrate atoms frozen, %d free to move during "
-        "placement relaxation",
-        context,
-        len(frozen),
-        n_substrate,
-        len(moving),
-    )
-    logger.info(
-        "  frozen (%s): indices %s",
-        _symbol_count_label(frozen, symbols),
-        format_atom_index_ranges(frozen),
-    )
-    logger.info(
-        "  moving (%s): indices %s",
-        _symbol_count_label(moving, symbols),
-        format_atom_index_ranges(moving),
-    )
+        logger.info(
+            "  moving (%s): indices %s",
+            _symbol_count_label(moving, symbols),
+            format_atom_index_ranges(moving),
+        )

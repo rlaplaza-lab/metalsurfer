@@ -55,6 +55,8 @@ from .result_paths import (
     step_placements_dirname,
 )
 
+OrientationType = Literal["parallel", "EN-down", "vertical", "round", "dissociative"]
+
 
 @dataclass
 class ReferenceEnergies:
@@ -93,9 +95,7 @@ class PlacementSpec:
     """Input to placement generator; fully deterministic."""
 
     conformer_index: int
-    orientation_type: Literal[
-        "parallel", "EN-down", "vertical", "round", "dissociative"
-    ]
+    orientation_type: OrientationType
     face_flip: bool
     en_atom_index: int | None
     site_index: int  # -1 for random
@@ -123,9 +123,7 @@ class PlacementPose:
     y_abs: float
     z_fraction: float
     z_abs: float | None = None
-    orientation_type: (
-        Literal["parallel", "EN-down", "vertical", "round", "dissociative"] | None
-    ) = None
+    orientation_type: OrientationType | None = None
     face_flip: bool = False
     en_atom_index: int | None = None
     tilt_deg: float = 0.0
@@ -245,7 +243,7 @@ _LEAN_PLACEHOLDER_DEFAULTS: dict[str, Any] = {
 
 _RICH_FIELD_COERCERS: dict[str, Callable[[Mapping[str, Any]], Any]] = {
     "orientation_type": lambda row: cast(
-        Literal["parallel", "EN-down", "vertical", "round", "dissociative"],
+        OrientationType,
         str(_require_initial(row, "orientation_type")),
     ),
     "face_flip": lambda row: _row_parse_bool(
@@ -311,9 +309,7 @@ class PlacementDescriptor:
     """
 
     conformer_index: int
-    orientation_type: Literal[
-        "parallel", "EN-down", "vertical", "round", "dissociative"
-    ]
+    orientation_type: OrientationType
     face_flip: bool
     en_atom_index: int | None
     site_index: int

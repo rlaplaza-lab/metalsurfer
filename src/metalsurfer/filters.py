@@ -26,7 +26,7 @@ from scipy.optimize import linear_sum_assignment
 from scipy.sparse.csgraph import connected_components
 
 from ._logging import warn_once
-from ._messages import SKIP_DESORPTION_CHECK_WARNING
+from ._messages import SKIP_DESORPTION_CHECK_WARNING, SKIP_TOPOLOGY_CHECK_WARNING
 from ._numeric_defaults import BINDING_DISTANCE_THRESHOLD_DEFAULT_ANGSTROM
 from ._rdkit import Chem, require_rdkit_chem
 from ._utils import cell_has_volume
@@ -887,14 +887,13 @@ def filter_results(
     if config.skip_topology_check:
         warn_once(
             logger,
-            "skip_topology",
-            "skip_topology_check=True: decomposition checks disabled; "
-            "results may include decomposed/rearranged structures",
+            "config.skip_topology_check",
+            SKIP_TOPOLOGY_CHECK_WARNING,
         )
     if config.skip_desorption_check:
         warn_once(
             logger,
-            "filters.skip_desorption",
+            "config.skip_desorption_check",
             SKIP_DESORPTION_CHECK_WARNING,
         )
 

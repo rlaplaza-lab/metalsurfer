@@ -472,7 +472,7 @@ def _validate_adsorption(
     if config.skip_desorption_check:
         warn_once(
             logger,
-            "shared.skip_desorption",
+            "config.skip_desorption_check",
             SKIP_DESORPTION_CHECK_WARNING,
         )
         return True, "", float(min_d)
@@ -551,7 +551,7 @@ def _evaluate_optimized_candidate(
     e_ads = e_adslab - E_slab - E_mol
     if e_ads > config.max_adsorption_energy:
         reason = f"E_ads too high: {e_ads:.4f} eV"
-        logger.debug("unrealistic E_ads: %.4f eV", e_ads)
+        logger.debug("%s", reason)
         return None, PlacementFailureEvent(
             placement_id=placement_id,
             stage="energy_cap",
@@ -1393,8 +1393,7 @@ def _prepare_molecule_screening(
             bo_enabled=request.bo_enabled,
             conformer_energies=conformer_energies,
         )
-    if resolved.num_placements is None:
-        raise ValueError(num_placements_must_be_set())
+    require_num_placements(resolved)
 
     return (
         MoleculeScreeningContext(
@@ -1412,6 +1411,20 @@ def _prepare_molecule_screening(
         None,
         resolved_reference,
     )
+
+
+def require_num_placements(config: AdsorptionConfig, suffix: str = "") -> int:
+    """Return ``config.num_placements`` or raise when unset."""
+    if config.num_placements is None:
+        raise ValueError(num_placements_must_be_set(suffix))
+    return config.num_placements
+
+
+def warn_empty_molecule_worklist(load_status: str, *, listed_csv: str) -> None:
+    """Log when molecule loading produced an empty worklist."""
+    msg = empty_molecule_input_message(load_status, listed_csv=listed_csv)
+    if msg is not None:
+        logger.warning(msg)
 
 
 def empty_molecule_input_message(

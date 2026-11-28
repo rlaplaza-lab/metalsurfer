@@ -19,7 +19,9 @@ from .._numeric_defaults import (
     MIN_CALCULATOR_CELL_C_ANG,
     MIN_PBC_IMAGE_SEPARATION_DEFAULT_ANGSTROM,
     SLAB_VACUUM_FACE_MARGIN_ANG,
+    SURFACE_CELL_GEOM_DET_EPS,
 )
+from .._utils import CELL_DET_EPS
 from ..config import (
     SLAB_RELAXATION_MODE,
     SLAB_RELAXATION_OPTIMIZER,
@@ -52,9 +54,6 @@ from .freeze import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Geometric degeneracy (1e-8); distinct from _utils.CELL_DET_EPS (1e-12 volume).
-_CELL_DET_EPS = 1e-8
 
 
 def _cell_determinant(cell: np.ndarray) -> float:
@@ -167,7 +166,7 @@ def ensure_slab_z_alignment(
     target_c = max(min_cell_c, z_max + min_top_vacuum)
     if c_len < target_c:
         if abs(cell[2, 0]) < 1e-6 and abs(cell[2, 1]) < 1e-6:
-            c_sign = np.sign(cell[2, 2]) if abs(cell[2, 2]) > 1e-12 else 1.0
+            c_sign = np.sign(cell[2, 2]) if abs(cell[2, 2]) > CELL_DET_EPS else 1.0
             cell[2, 2] = float(c_sign * target_c)
         else:
             cell[2] = cell[2] * (target_c / c_len)
@@ -340,7 +339,10 @@ def validate_substrate(
     require_atoms_pbc_matches_material(substrate, material_type, context="Substrate")
 
     cell_det = _cell_determinant(cell)
-    if material_type in ("slab", "porous") and abs(cell_det) <= _CELL_DET_EPS:
+    if (
+        material_type in ("slab", "porous")
+        and abs(cell_det) <= SURFACE_CELL_GEOM_DET_EPS
+    ):
         raise GeometryValidationError(
             f"Substrate cell is degenerate (det={cell_det:.2e}). "
             "Provide a non-zero periodic cell during preparation."
@@ -349,7 +351,7 @@ def validate_substrate(
     if material_type == "slab":
         a_len = float(np.linalg.norm(cell[0]))
         b_len = float(np.linalg.norm(cell[1]))
-        if a_len <= _CELL_DET_EPS or b_len <= _CELL_DET_EPS:
+        if a_len <= SURFACE_CELL_GEOM_DET_EPS or b_len <= SURFACE_CELL_GEOM_DET_EPS:
             raise GeometryValidationError(
                 f"Slab in-plane lattice vectors must be positive (a={a_len:.3f} A, "
                 f"b={b_len:.3f} A)."
@@ -377,7 +379,7 @@ def validate_substrate(
             f"{MIN_CALCULATOR_CELL_C_ANG:.0f} A required by the calculator."
         )
 
-    if material_type == "nanoparticle" and abs(cell_det) > _CELL_DET_EPS:
+    if material_type == "nanoparticle" and abs(cell_det) > SURFACE_CELL_GEOM_DET_EPS:
         margins = _vacuum_margins_ang(substrate)
         min_margin = float(np.min(margins))
         if min_margin < config.min_pbc_image_separation:

@@ -1,10 +1,13 @@
 """Tests for the io_results merge helper and related result-writing behaviour."""
 
+import errno
 import json
 import logging
 import warnings
+from unittest.mock import patch
 
 import pandas as pd
+import pytest
 from ase.build import fcc111
 from ase.io import read
 
@@ -12,6 +15,7 @@ from metalsurfer.io_results import (
     _merge_preserving_existing_molecules,
     _write_clean_xyz,
     _write_run_metadata_file,
+    _write_saturation_step_xyz,
     _write_site_overlay_xyz,
 )
 
@@ -175,3 +179,44 @@ def test_write_site_overlay_xyz_empty_positions_writes_substrate_only(tmp_path):
     _write_site_overlay_xyz(slab, np.empty((0, 3), dtype=float), out)
     read_back = read(str(out))
     assert len(read_back) == len(slab)
+
+
+def test_write_saturation_step_xyz_link_falls_back_on_exdev(tmp_path):
+    from .conftest import make_screening_result
+
+    slab = fcc111("Cu", size=(2, 2, 2), a=3.6, vacuum=5.0)
+    best = make_screening_result(
+        atoms=slab, energy_adsorption=-1.0, slab_size=len(slab)
+    )
+    mol_dir = tmp_path / "mol"
+    mol_dir.mkdir()
+
+    def _exdev_link(src, dst):
+        raise OSError(errno.EXDEV, "cross-device")
+
+    with patch("metalsurfer.io_results.os.link", side_effect=_exdev_link):
+        _write_saturation_step_xyz(best, str(mol_dir), step=1)
+
+    assert (mol_dir / "step_001_best_slab.xyz").exists()
+    assert (mol_dir / "step_001_Eads_-1.0000.xyz").exists()
+
+
+def test_write_saturation_step_xyz_link_reraises_unexpected_oserror(tmp_path):
+    from .conftest import make_screening_result
+
+    slab = fcc111("Cu", size=(2, 2, 2), a=3.6, vacuum=5.0)
+    best = make_screening_result(
+        atoms=slab, energy_adsorption=-1.0, slab_size=len(slab)
+    )
+    mol_dir = tmp_path / "mol"
+    mol_dir.mkdir()
+
+    def _eio_link(src, dst):
+        raise OSError(errno.EIO, "io error")
+
+    with (
+        patch("metalsurfer.io_results.os.link", side_effect=_eio_link),
+        pytest.raises(OSError) as exc_info,
+    ):
+        _write_saturation_step_xyz(best, str(mol_dir), step=1)
+    assert exc_info.value.errno == errno.EIO

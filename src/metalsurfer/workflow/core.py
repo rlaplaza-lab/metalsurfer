@@ -9,7 +9,6 @@ from .._logging import log_context
 from ..config import AdsorptionConfig
 from ..io_results import _write_clean_xyz
 from ..models import (
-    PlacementDescriptor,
     ReferenceEnergies,
     ScreeningResult,
 )
@@ -24,11 +23,9 @@ from ..result_paths import molecule_all_xyz_dir, results_dir_for
 from ..surface_prep import Substrate
 from .placement_fill import (
     fill_materialized_placements,
-    materialize_specs,
 )
 from .shared import (
     MoleculeScreenOutcome,
-    PlacementFailureEvent,
     ScreeningPrepareRequest,
     _failure_reason_counts,
     _finalize_screen_results,
@@ -324,75 +321,3 @@ def process_molecule(
         )
 
         return _outcome(results, filter_failure)
-
-
-def _evaluate_placement_batch(
-    specs: list,
-    conformers: list[Atoms],
-    slab: Substrate,
-    calculator,
-    ts_model,
-    config: AdsorptionConfig,
-    smiles: str,
-    E_slab: float,
-    E_mol: float,
-    molecule_name: str,
-    site_context: SiteContext | None = None,
-    base_slab_for_frozen: Atoms | None = None,
-    slab_for_sites: Atoms | None = None,
-    materialization_cache: dict[int, tuple[Atoms, PlacementDescriptor]] | None = None,
-    saturation_reuse: bool = False,
-    surface_prefix_atoms: int | None = None,
-    capacity: int | None = None,
-) -> tuple[list[ScreeningResult], list[PlacementFailureEvent]]:
-    """Run placement wrap + optimization + validation for a batch of specs.
-
-    BO callers pass a pre-validated pool; ``materialization_cache`` supplies
-    geometry-valid adsorbates so generation is a cache hit (no backfill).
-
-    Returns
-    -------
-    ``(results, failures)``
-    """
-    fill = materialize_specs(
-        specs=specs,
-        n_target=len(specs),
-        conformers=conformers,
-        slab_atoms=slab.atoms,
-        calculator=calculator,
-        config=config,
-        smiles=smiles,
-        site_context=site_context,
-        material_type=slab.material_type,
-        slab_for_sites=slab_for_sites,
-        materialization_cache=materialization_cache,
-        clamp_log_label=" (BO)",
-        capacity=capacity,
-    )
-    all_combined = fill.combined
-    placement_ids = fill.placement_ids
-    placement_descriptors = fill.descriptors
-    failures = list(fill.failures)
-
-    if not all_combined:
-        return [], failures
-
-    results, validation_failure_events, _n_optimization_failed = (
-        _optimize_and_evaluate_placements(
-            all_combined,
-            placement_ids,
-            placement_descriptors,
-            slab=slab.atoms,
-            ts_model=ts_model,
-            config=config,
-            material_type=slab.material_type,
-            energies=(E_slab, E_mol),
-            molecule_name=molecule_name,
-            base_slab_for_frozen=base_slab_for_frozen,
-            saturation_reuse=saturation_reuse,
-            log_prefix="BO batch ",
-            surface_prefix_atoms=surface_prefix_atoms,
-        )
-    )
-    failures.extend(validation_failure_events)
-    return results, failures

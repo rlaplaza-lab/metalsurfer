@@ -1,5 +1,6 @@
 """File I/O: XYZ, VASP inputs, CSV summaries, run metadata."""
 
+import errno
 import json
 import logging
 import os
@@ -14,7 +15,10 @@ import numpy as np
 import pandas as pd
 from ase import Atoms
 
-from ._messages import UNREADABLE_EXISTING_FILE_WARNING
+from ._messages import (
+    EXISTING_CSV_MISSING_KEY_COL_WARNING,
+    UNREADABLE_EXISTING_FILE_WARNING,
+)
 from .config import AdsorptionConfig
 from .ml.schema import SCHEMA_VERSION, config_to_context_row
 from .models import (
@@ -380,9 +384,7 @@ def _merge_preserving_existing_molecules(
         other_key = "molecules" if key_col == "molecule" else "molecule"
         if other_key in existing.columns:
             return _concat_union_frames(existing, new_df)
-        logger.warning(
-            "Existing %s has no %r column; it will be replaced", path.name, key_col
-        )
+        logger.warning(EXISTING_CSV_MISSING_KEY_COL_WARNING, path.name, key_col)
         return new_df
     retained = existing[~existing[key_col].isin(set(new_df[key_col]))]
     if retained.empty:
@@ -1167,7 +1169,17 @@ def _write_saturation_step_xyz(best: ScreeningResult, mol_dir: str, step: int) -
     Path(energy_path).unlink(missing_ok=True)
     try:
         os.link(primary, energy_path)
-    except OSError:
-        shutil.copyfile(primary, energy_path)
+    except OSError as exc:
+        if exc.errno == errno.EEXIST and Path(energy_path).exists():
+            pass
+        elif exc.errno in (
+            errno.EXDEV,
+            errno.EPERM,
+            errno.EOPNOTSUPP,
+            getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
+        ):
+            shutil.copyfile(primary, energy_path)
+        else:
+            raise
     adsorbate = best.atoms[best.slab_size :]
     _write_clean_xyz(adsorbate, paths["step_adsorbate_path"])

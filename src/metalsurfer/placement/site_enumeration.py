@@ -7,6 +7,7 @@ import numpy as np
 from ase import Atoms
 from scipy.spatial import Delaunay
 
+from .._logging import warn_once
 from .._messages import no_accessible_sites_message
 from .._numeric_defaults import DEFAULT_N_JOBS
 from .._utils import cell_has_volume
@@ -92,7 +93,9 @@ def _delaunay_classify_inputs(
 ) -> _DelaunayClassifyInputs | None:
     """Build prebuilt Delaunay classification inputs, or ``None`` when disabled."""
     if site_classification_method == "delaunay" and material_type != "slab":
-        logger.warning(
+        warn_once(
+            logger,
+            f"site_classification.delaunay:{material_type}",
             "site_classification_method='delaunay' is slab-only; "
             "keeping topology labels (nanoparticle) or distance-ratio "
             "(porous) for material_type=%r",

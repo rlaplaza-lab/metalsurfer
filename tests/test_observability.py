@@ -413,6 +413,55 @@ class TestLogContext:
             assert captured[0].levelno == logging.INFO
             assert captured[0].getMessage() == "p3"
 
+    def test_torchsim_output_capture_restores_streams_when_flush_raises(
+        self, monkeypatch
+    ):
+        """Body exceptions must propagate; failing flush must not leave streams swapped."""
+        real_out = sys.stdout
+        real_err = sys.stderr
+
+        class _FlakyStream:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def write(self, s):
+                return len(s) if isinstance(s, str) else 0
+
+            def flush(self):
+                raise OSError("flush failed")
+
+            def isatty(self):
+                return False
+
+        monkeypatch.setattr(
+            "metalsurfer._logging._LogStreamToLogger",
+            _FlakyStream,
+        )
+        with (
+            pytest.raises(RuntimeError, match="body"),
+            torchsim_output_capture(carriage_return_rate_limit_s=0.0),
+        ):
+            raise RuntimeError("body")
+
+        assert sys.stdout is real_out
+        assert sys.stderr is real_err
+
+    def test_log_record_factory_reinstalls_when_replaced(self):
+        ensure_log_record_defaults()
+
+        def foreign_factory(*args, **kwargs):
+            return logging.LogRecord(*args, **kwargs)
+
+        logging.setLogRecordFactory(foreign_factory)
+        ensure_log_record_defaults()
+        factory = logging.getLogRecordFactory()
+        assert getattr(factory, "_metalsurfer_ctx_prefix_factory", False)
+
+        with log_context(molecule="water"):
+            record = factory("test", logging.INFO, "", 0, "hello", (), None)
+        assert hasattr(record, "ctx_prefix")
+        assert "molecule=water" in record.ctx_prefix
+
 
 # ---------------------------------------------------------------------------
 # Vectorized helpers — correctness edge cases

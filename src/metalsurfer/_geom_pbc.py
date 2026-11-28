@@ -23,6 +23,27 @@ from ._numeric_defaults import (
 )
 from ._utils import cell_has_volume
 
+# Corrections for minimum_image_cartesian_delta, keyed by tuple(pbc).
+_MIC_CORRECTIONS_CACHE: dict[tuple[bool, ...], np.ndarray] = {}
+
+
+def _mic_corrections_for_pbc(pbc_arr: np.ndarray) -> np.ndarray:
+    key = tuple(bool(p) for p in pbc_arr)
+    cached = _MIC_CORRECTIONS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    options = [(-1, 0, 1) if p else (0,) for p in key]
+    corrections = np.asarray(list(product(*options)), dtype=float)
+    _MIC_CORRECTIONS_CACHE[key] = corrections
+    return corrections
+
+
+def project_out_normal(vectors: np.ndarray, n_hat: np.ndarray) -> np.ndarray:
+    """Remove the component of *vectors* along unit normal *n_hat*."""
+    arr = np.asarray(vectors, dtype=float)
+    n = np.asarray(n_hat, dtype=float).reshape(3)
+    return arr - (arr @ n)[..., None] * n
+
 
 def cart_to_frac(
     points: np.ndarray,
@@ -171,18 +192,16 @@ def minimum_image_cartesian_delta(
     )
     single = arr.ndim == 1
     flat = arr.reshape(-1, 3)
-    out = np.empty_like(flat)
+    corrections = _mic_corrections_for_pbc(pbc_arr)
 
-    options = [(-1, 0, 1) if bool(p) else (0,) for p in pbc_arr]
-    corrections = np.asarray(list(product(*options)), dtype=float)
-
-    for i, d in enumerate(flat):
-        frac = d @ inv
-        base = np.zeros(3, dtype=float)
-        base[pbc_arr] = np.rint(frac[pbc_arr])
-        shifts = (frac - (base + corrections)) @ cell_arr
-        norms_sq = np.einsum("ij,ij->i", shifts, shifts)
-        out[i] = shifts[int(np.argmin(norms_sq))]
+    frac = flat @ inv
+    base = np.zeros_like(frac)
+    base[:, pbc_arr] = np.rint(frac[:, pbc_arr])
+    shifted_frac = frac[:, None, :] - (base[:, None, :] + corrections[None, :, :])
+    shifts = shifted_frac @ cell_arr
+    norms_sq = np.einsum("...i,...i->...", shifts, shifts)
+    best = np.argmin(norms_sq, axis=1)
+    out = shifts[np.arange(shifts.shape[0]), best]
 
     if single:
         return out[0]
